@@ -16,6 +16,9 @@ import nest_asyncio
 from typing import List, Tuple, Optional
 from cachetools import TTLCache, cached
 from tenacity import retry, stop_after_attempt, wait_fixed
+from keep_alive import keep_alive
+
+keep_alive()
 
 # Apply nest_asyncio for Windows compatibility
 nest_asyncio.apply()
