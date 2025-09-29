@@ -14,6 +14,8 @@ import asyncio
 from dotenv import load_dotenv
 import nest_asyncio
 from typing import List, Tuple, Optional
+from cachetools import TTLCache, cached
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # Apply nest_asyncio for Windows compatibility
 nest_asyncio.apply()
@@ -42,6 +44,8 @@ ALPHA_VANTAGE_KEY = os.getenv('ALPHA_VANTAGE_KEY', 'demo')
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 YOUR_ADMIN_ID = int(os.getenv('YOUR_ADMIN_ID', '0'))
 CHANNEL_ID = os.getenv('CHANNEL_ID', '')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', None)  # For webhook mode
+PORT = int(os.getenv('PORT', 8443))
 
 # Validate critical configuration
 if not all([BOT_TOKEN, CHANNEL_ID]):
@@ -59,10 +63,12 @@ if CHANNEL_ID.startswith('100') and len(CHANNEL_ID) > 10:
 DB_NAME = 'market_posts.db'
 
 class MarketNewsBot:
+    cache = TTLCache(maxsize=100, ttl=300)
     def __init__(self):
         self.db_name = DB_NAME
         self.channel_id = CHANNEL_ID
         self.admin_id = YOUR_ADMIN_ID
+        self.cache = TTLCache(maxsize=100, ttl=300)  # 5 min cache for API calls
         self.init_database()
         
     def init_database(self):
@@ -162,6 +168,8 @@ class MarketNewsBot:
             logger.error(f"Failed to get posts to delete: {e}")
             return []
 
+    @cached(cache)
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def fetch_crypto_news(self) -> Tuple[str, str]:
         """Fetch top 5 crypto prices and changes from CoinGecko with simplified formatting"""
         url = 'https://api.coingecko.com/api/v3/coins/markets'
@@ -189,13 +197,15 @@ class MarketNewsBot:
                 arrow = "↑" if change > 0 else "↓"
                 summary_lines.append(f"*{name}*: ${price:,.2f} {arrow} {change:+.1f}%")
             
-            summary = "\n".join(summary_lines)
+            summary = "\n\n".join(summary_lines)  # Added double spacing
             return headline, summary
             
         except Exception as e:
             logger.error(f"Crypto fetch failed: {e}")
             return "🚀 Top Crypto", "⚠️ Data unavailable"
 
+    @cached(cache)
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def fetch_stock_news(self) -> Tuple[str, str]:
         """Fetch major stock quotes with simplified layout"""
         if not ALPHA_VANTAGE_KEY or ALPHA_VANTAGE_KEY == 'demo':
@@ -236,9 +246,11 @@ class MarketNewsBot:
                 summaries.append(f"*{symbol}*: Error")
         
         headline = "💹 Top Stocks"
-        summary = "\n".join(summaries)
+        summary = "\n\n".join(summaries)  # Added double spacing
         return headline, summary
 
+    @cached(cache)
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def fetch_economic_news(self) -> Tuple[str, str]:
         """Fetch expanded economic headlines from NewsAPI - more market-influencing news"""
         if not NEWSAPI_KEY:
@@ -272,7 +284,7 @@ class MarketNewsBot:
                 
                 summary_lines.append(f"{i}. *{title}* ({source}, {published}) [Read]({url})")
             
-            summary = "\n".join(summary_lines)
+            summary = "\n\n".join(summary_lines)  # Added double spacing
             return headline, summary
             
         except Exception as e:
@@ -289,7 +301,7 @@ class MarketNewsBot:
             current_time = datetime.utcnow().strftime('%H:%M UTC')
             update_type = "📊 Update" 
             
-            post_text = f"📈 *Market Update* ({current_time})\n\n{update_type}\n\n{crypto_h}\n{crypto_s}\n\n{stock_h}\n{stock_s}\n\n{econ_h}\n{econ_s}"
+            post_text = f"📈 *Market Update* ({current_time})\n\n{update_type}\n\n{crypto_h}\n\n{crypto_s}\n\n{stock_h}\n\n{stock_s}\n\n{econ_h}\n\n{econ_s}"  # Added extra spacing
             
             if include_footer:
                 post_text += f"\n\n*Data as of {current_time} UTC*"
@@ -429,7 +441,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("📊 Loading...")
         crypto_h, crypto_s = bot_instance.fetch_crypto_news()
         stock_h, stock_s = bot_instance.fetch_stock_news()
-        stats_text = f"📊 *Quick Markets*\n\n{crypto_h}\n{crypto_s}\n\n{stock_h}\n{stock_s}"
+        stats_text = f"📊 *Quick Markets*\n\n{crypto_h}\n\n{crypto_s}\n\n{stock_h}\n\n{stock_s}"  # Added spacing
         await query.edit_message_text(stats_text, parse_mode='Markdown')
     
     elif data == 'admin_broadcast':
@@ -548,12 +560,22 @@ def main():
         next_update = bot_instance.get_next_update_time()
         print(f"\n✅ Bot Live!\nChannel: {bot_instance.channel_id}\nNext update: {next_update} UTC\nUse /admin for menu")
         
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            timeout=10,
-            bootstrap_retries=5
-        )
+        if WEBHOOK_URL:
+            logger.info("Starting in webhook mode")
+            application.run_webhook(
+                listen='0.0.0.0',
+                port=PORT,
+                url_path=BOT_TOKEN.split(':')[1],
+                webhook_url=WEBHOOK_URL
+            )
+        else:
+            logger.info("Starting in polling mode")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                timeout=10,
+                bootstrap_retries=5
+            )
         
     except Exception as e:
         logger.error(f"Fatal error: {e}")
