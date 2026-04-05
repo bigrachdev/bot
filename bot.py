@@ -2,7 +2,6 @@
 Main bot initialization and event loop
 """
 import asyncio
-import sys
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -81,10 +80,6 @@ async def setup_bot():
 async def main():
     """Main async entry point"""
     try:
-        # On Windows, use the ProactorEventLoop to avoid issues with socket operations
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
         # Start keep-alive server if enabled
         if KEEP_ALIVE:
             start_keep_alive()
@@ -113,4 +108,3 @@ if __name__ == '__main__':
         logger.info("⏹️ Bot shutdown complete")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
-        sys.exit(1)
