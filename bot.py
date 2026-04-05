@@ -2,6 +2,7 @@
 Main bot initialization and event loop
 """
 import asyncio
+import signal
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -19,6 +20,7 @@ logger = setup_logging()
 
 # Global bot instance
 bot_instance = None
+stop_event = None
 
 async def setup_bot():
     """Initialize bot, database, and handlers"""
@@ -79,32 +81,53 @@ async def setup_bot():
 
 async def main():
     """Main async entry point"""
+    global stop_event
+
+    # Start keep-alive server if enabled
+    if KEEP_ALIVE:
+        start_keep_alive()
+        asyncio.create_task(ping_server())
+        logger.info("✅ Keep-alive pings scheduled")
+
+    application = await setup_bot()
+
+    logger.info("🌐 Starting bot polling...")
     try:
-        # Start keep-alive server if enabled
-        if KEEP_ALIVE:
-            start_keep_alive()
-            asyncio.create_task(ping_server())
-            logger.info("✅ Keep-alive pings scheduled")
-
-        application = await setup_bot()
-
-        logger.info("🌐 Starting bot polling...")
-        await application.run_polling(
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(
             poll_interval=1.0,
             allowed_updates=['message', 'callback_query'],
             drop_pending_updates=True
         )
-        
-    except KeyboardInterrupt:
-        logger.info("⏹️ Bot stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Bot error: {e}")
-        raise
+
+        # Keep running until signalled to stop
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        logger.info("⏹️ Bot stopped")
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        logger.info("✅ Bot shutdown complete")
 
 if __name__ == '__main__':
+    global stop_event
+    stop_event = asyncio.Event()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    def handle_signal(sig, frame):
+        logger.info(f"Received signal {sig}, shutting down...")
+        loop.call_soon_threadsafe(stop_event.set)
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("⏹️ Bot shutdown complete")
+        loop.run_until_complete(main())
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
+    finally:
+        loop.close()
