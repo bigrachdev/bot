@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: market-bot
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: YOUR_ADMIN_ID
+        sync: false
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: ALPHAVANTAGE_KEY
+        sync: false
+      - key: FINNHUB_KEY
+        sync: false
+      - key: CNBC_RSS_URL
+        sync: false
+      - key: TARGET_CHANNELS
+        sync: false

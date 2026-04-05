@@ -1,0 +1,8 @@
+python-telegram-bot==20.3
+requests==2.31.0
+apscheduler==3.10.4
+pytz==2023.3
+python-dotenv==1.0.0
+tradingview-ta==3.3.0
+nest-asyncio==1.5.8
+asyncio-contextmanager==1.0.0
