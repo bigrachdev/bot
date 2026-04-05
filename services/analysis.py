@@ -4,7 +4,7 @@ Technical analysis service for stock market signals
 import aiohttp
 from tradingview_ta import TA_Handler, Interval
 from utils.logger import logger
-from config.settings import TOP_STOCKS, TOP_CRYPTO, TOP_FOREX, FINNHUB_KEY
+from config.settings import TOP_STOCKS, TOP_FOREX, FINNHUB_KEY
 
 class AnalysisService:
     """Handle technical analysis and signal detection"""
@@ -127,49 +127,6 @@ class AnalysisService:
             logger.error(f"Failed to fetch stocks analysis: {e}")
         
         return strong_signals
-
-    @staticmethod
-    async def fetch_top_crypto_analysis() -> list:
-        """Fetch analysis for top crypto, filter strong signals"""
-        strong_signals = []
-        
-        try:
-            # Get dynamic crypto list from CoinGecko
-            crypto_list = await AnalysisService.fetch_top_crypto()
-            
-            for crypto in crypto_list[:10]:
-                analysis = await AnalysisService.fetch_analysis(crypto['symbol'], 'CRYPTO')
-                
-                if analysis and analysis['recommendation'] in ['STRONG_BUY', 'STRONG_SELL']:
-                    strong_signals.append(analysis)
-        except Exception as e:
-            logger.error(f"Failed to fetch crypto analysis: {e}")
-        
-        return strong_signals
-
-    @staticmethod
-    async def fetch_top_crypto() -> list:
-        """Fetch top 50 crypto symbols from CoinGecko API"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://api.coingecko.com/api/v3/coins/markets"
-                params = {
-                    'vs_currency': 'usd',
-                    'order': 'market_cap_desc',
-                    'per_page': 50,
-                    'page': 1,
-                    'sparkline': False
-                }
-                
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return [{'symbol': coin['symbol'].upper(), 'name': coin['name']} 
-                               for coin in data]
-        except Exception as e:
-            logger.error(f"Failed to fetch top crypto: {e}")
-        
-        return []
 
     @staticmethod
     def format_analysis_message(signals: list, market_type: str = 'Stocks') -> str:

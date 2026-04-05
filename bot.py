@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from utils.logger import setup_logging
-from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, TOP_STOCKS, TOP_FOREX, TOP_CRYPTO, KEEP_ALIVE
+from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, TOP_STOCKS, TOP_FOREX, KEEP_ALIVE
 from database.db import MarketBot
 from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers

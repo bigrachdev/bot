@@ -4,7 +4,7 @@ User command handlers for market data queries
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 from utils.logger import logger
-from config.settings import TOP_STOCKS, TOP_CRYPTO, TOP_FOREX
+from config.settings import TOP_STOCKS, TOP_FOREX
 from schedulers.news_scheduler import NewsScheduler
 from schedulers.analysis_scheduler import AnalysisScheduler
 
@@ -24,7 +24,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Create inline keyboard for market selection
         keyboard = [
             [InlineKeyboardButton("📈 Stocks", callback_data='market_stocks')],
-            [InlineKeyboardButton("🪙 Cryptocurrency", callback_data='market_crypto')],
             [InlineKeyboardButton("💱 Forex", callback_data='market_forex')],
             [InlineKeyboardButton("📰 Get News Now", callback_data='action_news')]
         ]
@@ -50,8 +49,6 @@ async def handle_market_buttons(update: Update, context: ContextTypes.DEFAULT_TY
         
         if query.data == 'market_stocks':
             await show_stocks_menu(query, context)
-        elif query.data == 'market_crypto':
-            await show_crypto_menu(query, context)
         elif query.data == 'market_forex':
             await show_forex_menu(query, context)
         elif query.data == 'action_news':
@@ -95,49 +92,6 @@ async def show_stocks_menu(query, context):
         
     except Exception as e:
         logger.error(f"Error showing stocks menu: {e}")
-
-async def show_crypto_menu(query, context):
-    """Show crypto pagination menu"""
-    try:
-        bot_instance = context.application.bot_data.get('bot_instance')
-        
-        # Get top crypto dynamically
-        from services.analysis import AnalysisService
-        top_crypto = await AnalysisService.fetch_top_crypto()
-        
-        page = int(query.data.split('_')[-1]) if '_' in query.data else 0
-        page_size = 5
-        start = page * page_size
-        end = start + page_size
-        
-        crypto_page = top_crypto[start:end]
-        
-        keyboard = [[InlineKeyboardButton(f"{c['symbol']} - {c['name']}", 
-                                        callback_data=f"crypto_{c['symbol']}")] 
-                   for c in crypto_page]
-        
-        # Navigation buttons
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f'market_crypto_{page-1}'))
-        if end < len(top_crypto):
-            nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f'market_crypto_{page+1}'))
-        
-        if nav_buttons:
-            keyboard.append(nav_buttons)
-        
-        keyboard.append([InlineKeyboardButton("↩️ Back", callback_data='back_to_main')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text=f"🪙 <b>Top Cryptocurrencies</b> (Page {page + 1})\n\nSelect a crypto to analyze:",
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
-        
-    except Exception as e:
-        logger.error(f"Error showing crypto menu: {e}")
 
 async def show_forex_menu(query, context):
     """Show forex pagination menu"""
@@ -206,13 +160,9 @@ async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_
             await AnalysisScheduler.send_analysis_to_chat(
                 context.application.bot_data.get('bot_instance'), chat_id, 'stocks'
             )
-        elif market_type == 'crypto':
-            await AnalysisScheduler.send_analysis_to_chat(
-                context.application.bot_data.get('bot_instance'), chat_id, 'crypto'
-            )
         elif market_type == 'forex':
             await AnalysisScheduler.send_analysis_to_chat(
-                context.application.bot_data.get('bot_instance'), chat_id, 'stocks'
+                context.application.bot_data.get('bot_instance'), chat_id, 'forex'
             )
         
         await query.answer()
@@ -227,7 +177,6 @@ async def handle_back_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         keyboard = [
             [InlineKeyboardButton("📈 Stocks", callback_data='market_stocks')],
-            [InlineKeyboardButton("🪙 Cryptocurrency", callback_data='market_crypto')],
             [InlineKeyboardButton("💱 Forex", callback_data='market_forex')],
             [InlineKeyboardButton("📰 Get News Now", callback_data='action_news')]
         ]
@@ -245,6 +194,6 @@ def setup_user_handlers(application):
     """Register all user command handlers"""
     application.add_handler(CommandHandler('start', cmd_start))
     application.add_handler(CallbackQueryHandler(handle_market_buttons, pattern='^market_'))
-    application.add_handler(CallbackQueryHandler(handle_symbol_selection, pattern='^(stock|crypto|forex)_'))
+    application.add_handler(CallbackQueryHandler(handle_symbol_selection, pattern='^(stock|forex)_'))
     application.add_handler(CallbackQueryHandler(handle_back_button, pattern='^back_to_main$'))
     application.add_handler(CallbackQueryHandler(handle_market_buttons, pattern='^action_'))

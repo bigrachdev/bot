@@ -66,11 +66,8 @@ class AnalysisScheduler:
             if market.lower() == 'stocks':
                 signals = await AnalysisService.fetch_top_stocks_analysis()
                 message = AnalysisService.format_analysis_message(signals, 'Stocks')
-            elif market.lower() == 'crypto':
-                signals = await AnalysisService.fetch_top_crypto_analysis()
-                message = AnalysisService.format_analysis_message(signals, 'Crypto')
             else:
-                message = "Unknown market type. Use 'stocks' or 'crypto'."
+                message = "Unknown market type. Use 'stocks'."
             
             await bot_instance.bot.send_message(
                 chat_id=chat_id,
