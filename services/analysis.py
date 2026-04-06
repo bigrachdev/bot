@@ -83,20 +83,20 @@ class AnalysisService:
                 symbol=symbol,
                 screener=screener,
                 exchange=exchange,
-                interval=Interval.INTERVAL_1D
+                interval=Interval.INTERVAL_1_DAY
             )
 
             analysis = handler.get_analysis()
-            
+
             # Enhance with Finnhub indicators
             finnhub_data = await AnalysisService.fetch_finnhub_indicators(symbol)
 
             return {
                 'symbol': symbol,
-                'recommendation': analysis.recommendation,
+                'recommendation': analysis.summary.get('RECOMMENDATION', 'N/A'),
                 'oscillators': {
                     'rsi': finnhub_data.get('rsi', analysis.oscillators.get('RSI', 'N/A')),
-                    'stoch': analysis.oscillators.get('Stoch.K', 'N/A'),
+                    'stoch': analysis.oscillators.get('STOCH.K', analysis.oscillators.get('STOCHK', 'N/A')),
                     'macd': finnhub_data.get('macd', 'N/A'),
                 },
                 'moving_averages': {
@@ -113,19 +113,18 @@ class AnalysisService:
     async def fetch_top_stocks_analysis() -> list:
         """Fetch analysis for top 10 stocks, filter strong signals"""
         strong_signals = []
-        
+
         try:
-            for symbol in TOP_STOCKS[:10]:
+            for stock_data in TOP_STOCKS[:10]:
+                symbol = stock_data['symbol']
                 analysis = await AnalysisService.fetch_analysis(symbol, 'STOCKS')
-                
-                if analysis and analysis['recommendation'] in ['STRONG_BUY', 'STRONG_SELL']:
+
+                if analysis and analysis['recommendation'] in ['STRONG_BUY', 'STRONG_SELL', 'BUY', 'SELL']:
                     strong_signals.append(analysis)
-                
-                # Rate limiting
-                await aiohttp.ClientSession().close()
+
         except Exception as e:
             logger.error(f"Failed to fetch stocks analysis: {e}")
-        
+
         return strong_signals
 
     @staticmethod

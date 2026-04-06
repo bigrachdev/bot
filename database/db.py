@@ -116,15 +116,31 @@ class MarketBot:
             return False
 
     def get_subscribed_chats(self) -> List[Tuple[int, str]]:
-        """Get all target channels from config"""
+        """Get subscribed chats from DB + static channels from config"""
         chats = []
+        seen_chat_ids = set()
+
+        try:
+            conn = sqlite3.connect(self.db_name, check_same_thread=False)
+            c = conn.cursor()
+            c.execute("SELECT chat_id, chat_type FROM subscriptions")
+            for chat_id, chat_type in c.fetchall():
+                chats.append((chat_id, chat_type))
+                seen_chat_ids.add(chat_id)
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to read subscriptions: {e}")
+
         for chat_id_str in TARGET_CHANNELS:
             try:
-                chats.append((int(chat_id_str), 'channel'))
+                chat_id = int(chat_id_str)
+                if chat_id not in seen_chat_ids:
+                    chats.append((chat_id, 'channel'))
+                    seen_chat_ids.add(chat_id)
             except ValueError:
                 logger.warning(f"Invalid channel ID in config: {chat_id_str}")
         if not chats:
-            logger.warning("No TARGET_CHANNELS configured - broadcasts will have nowhere to post")
+            logger.warning("No subscribed chats found - broadcasts will have nowhere to post")
         return chats
 
     def is_news_cached(self, news_id: str) -> bool:

@@ -13,8 +13,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = update.effective_user.id
         username = update.effective_user.username or update.effective_user.first_name
+        chat = update.effective_chat
+        chat_id = chat.id
 
         bot_instance = context.application.bot_data.get('bot_instance')
+        bot_instance.subscribe_chat(chat_id, chat.type, chat.title or username)
 
         # Get custom welcome message
         welcome_msg = bot_instance.get_setting('welcome_message',

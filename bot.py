@@ -12,7 +12,6 @@ from database.db import MarketBot
 from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers
 from schedulers.news_scheduler import NewsScheduler
-from schedulers.analysis_scheduler import AnalysisScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
 # Initialize logger
@@ -58,15 +57,6 @@ async def setup_bot():
             name='Broadcast news hourly'
         )
 
-        # Schedule analysis broadcast at :30 every hour
-        scheduler.add_job(
-            AnalysisScheduler.broadcast_analysis,
-            CronTrigger(minute=30),
-            args=[bot_instance],
-            id='analysis_broadcast',
-            name='Broadcast analysis every 30 minutes'
-        )
-
         # Start the scheduler
         scheduler.start()
         logger.info("✅ Scheduler started")
@@ -75,8 +65,7 @@ async def setup_bot():
         application.bot_data['scheduler'] = scheduler
 
         logger.info("✅ Schedulers configured")
-        logger.info("📊 News broadcast: Every hour at :00")
-        logger.info("📈 Analysis broadcast: Every hour at :30")
+        logger.info("📰 News broadcast: Every hour at :00")
 
         return application
         
@@ -103,6 +92,10 @@ async def main():
             allowed_updates=['message', 'callback_query'],
             drop_pending_updates=True
         )
+
+        # Trigger immediate warm-up news broadcast on startup so channels don't wait
+        # until the next :00 cron window.
+        asyncio.create_task(NewsScheduler.broadcast_news(bot_instance))
 
         # Keep running until signalled to stop
         await stop_event.wait()
