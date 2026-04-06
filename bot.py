@@ -12,6 +12,7 @@ from database.db import MarketBot
 from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers
 from schedulers.news_scheduler import NewsScheduler
+from schedulers.analysis_scheduler import AnalysisScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
 # Initialize logger
@@ -57,6 +58,15 @@ async def setup_bot():
             name='Broadcast news hourly'
         )
 
+        # Schedule analysis broadcast at :30 every hour
+        scheduler.add_job(
+            AnalysisScheduler.broadcast_analysis,
+            CronTrigger(minute=30),
+            args=[bot_instance],
+            id='analysis_broadcast',
+            name='Broadcast analysis every 30 minutes'
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info("✅ Scheduler started")
@@ -66,6 +76,7 @@ async def setup_bot():
 
         logger.info("✅ Schedulers configured")
         logger.info("📰 News broadcast: Every hour at :00")
+        logger.info("📈 Analysis broadcast: Every hour at :30")
 
         return application
         
