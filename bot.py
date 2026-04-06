@@ -18,9 +18,9 @@ from utils.keep_alive import start_keep_alive, ping_server
 # Initialize logger
 logger = setup_logging()
 
-# Global bot instance
+# Global bot instance and stop event
 bot_instance = None
-stop_event = None
+stop_event: asyncio.Event = None
 
 async def setup_bot():
     """Initialize bot, database, and handlers"""
@@ -81,8 +81,6 @@ async def setup_bot():
 
 async def main():
     """Main async entry point"""
-    global stop_event
-
     # Start keep-alive server if enabled
     if KEEP_ALIVE:
         start_keep_alive()
@@ -112,11 +110,10 @@ async def main():
         logger.info("✅ Bot shutdown complete")
 
 if __name__ == '__main__':
-    global stop_event
-    stop_event = asyncio.Event()
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    stop_event = asyncio.Event()
 
     def handle_signal(sig, frame):
         logger.info(f"Received signal {sig}, shutting down...")
