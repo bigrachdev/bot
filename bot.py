@@ -48,7 +48,7 @@ async def setup_bot():
         
         # Setup scheduler for broadcasts
         scheduler = AsyncIOScheduler(timezone="UTC")
-        
+
         # Schedule news broadcast at :00 every hour
         scheduler.add_job(
             NewsScheduler.broadcast_news,
@@ -57,7 +57,7 @@ async def setup_bot():
             id='news_broadcast',
             name='Broadcast news hourly'
         )
-        
+
         # Schedule analysis broadcast at :30 every hour
         scheduler.add_job(
             AnalysisScheduler.broadcast_analysis,
@@ -66,13 +66,18 @@ async def setup_bot():
             id='analysis_broadcast',
             name='Broadcast analysis every 30 minutes'
         )
-        
-        application.job_queue.scheduler = scheduler
-        
+
+        # Start the scheduler
+        scheduler.start()
+        logger.info("✅ Scheduler started")
+
+        # Store scheduler in application context for cleanup
+        application.bot_data['scheduler'] = scheduler
+
         logger.info("✅ Schedulers configured")
         logger.info("📊 News broadcast: Every hour at :00")
         logger.info("📈 Analysis broadcast: Every hour at :30")
-        
+
         return application
         
     except Exception as e:
@@ -104,6 +109,12 @@ async def main():
     except asyncio.CancelledError:
         logger.info("⏹️ Bot stopped")
     finally:
+        # Shutdown scheduler
+        scheduler = application.bot_data.get('scheduler')
+        if scheduler:
+            scheduler.shutdown()
+            logger.info("✅ Scheduler shut down")
+        
         await application.updater.stop()
         await application.stop()
         await application.shutdown()
