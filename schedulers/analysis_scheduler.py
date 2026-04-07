@@ -15,15 +15,32 @@ class AnalysisScheduler:
         try:
             logger.info("Starting analysis broadcast...")
 
+            if chat_list is None:
+                chat_list = bot_instance.get_subscribed_chats()
+
             signals = await AnalysisService.fetch_top_stocks_analysis()
             if not signals:
+                status = AnalysisService.get_last_status()
                 logger.info("No stock performance data detected")
+                if status == "rate_limited" and chat_list:
+                    notice = (
+                        "<b>Stocks Analysis Update</b>\n"
+                        "Data providers are temporarily rate-limiting requests. "
+                        "The bot will retry automatically on the next cycle."
+                    )
+                    for chat_id, _chat_type in chat_list:
+                        try:
+                            await bot_instance.bot.send_message(
+                                chat_id=chat_id,
+                                text=notice,
+                                parse_mode='HTML',
+                            )
+                            await asyncio.sleep(0.4)
+                        except Exception as e:
+                            logger.error(f"Failed to send analysis status notice to chat {chat_id}: {e}")
                 return
 
             message = AnalysisService.format_analysis_message(signals, 'Stocks')
-
-            if chat_list is None:
-                chat_list = bot_instance.get_subscribed_chats()
 
             if not chat_list:
                 logger.info("No subscribed chats for analysis broadcast")

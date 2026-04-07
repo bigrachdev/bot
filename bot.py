@@ -42,11 +42,6 @@ async def startup_auto_broadcast(
             except Exception as e:
                 logger.error(f"Startup news broadcast failed: {e}")
 
-            try:
-                await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=chat_list)
-            except Exception as e:
-                logger.error(f"Startup analysis broadcast failed: {e}")
-
             return
 
         logger.info("No targets detected yet. Waiting before auto-broadcast retry...")

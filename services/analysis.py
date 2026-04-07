@@ -2,12 +2,23 @@
 Technical analysis service for stock market signals
 """
 import aiohttp
+import asyncio
+from datetime import datetime, timedelta, timezone
 from tradingview_ta import TA_Handler, Interval
 from utils.logger import logger
 from config.settings import TOP_STOCKS, TOP_FOREX, FINNHUB_KEY
 
 class AnalysisService:
     """Handle technical analysis and signal detection"""
+    _signals_cache = []
+    _signals_cache_at = None
+    _last_status = "idle"
+    _cache_ttl_minutes = 90
+
+    @staticmethod
+    def get_last_status() -> str:
+        """Return last analysis fetch status for scheduler decisions."""
+        return AnalysisService._last_status
 
     @staticmethod
     def _normalize_symbol_for_tradingview(symbol: str, exchange: str) -> str:
@@ -122,6 +133,9 @@ class AnalysisService:
                 }
             }
         except Exception as e:
+            err_text = str(e).lower()
+            if "429" in err_text or "rate limit" in err_text:
+                AnalysisService._last_status = "rate_limited"
             logger.error(f"Failed to fetch analysis for {symbol}: {e}")
             return None
 
@@ -129,9 +143,16 @@ class AnalysisService:
     async def fetch_top_stocks_analysis() -> list:
         """Fetch analysis for top 10 stocks, filter strong signals"""
         strong_signals = []
+        consecutive_rate_limits = 0
 
         try:
-            for stock_data in TOP_STOCKS[:10]:
+            # Skip known unsupported exchanges for TradingView stock screener path.
+            candidates = [
+                s for s in TOP_STOCKS
+                if (s.get("exchange", "").upper() in {"NASDAQ", "NYSE"})
+            ][:10]
+
+            for stock_data in candidates:
                 symbol = stock_data['symbol']
                 exchange = stock_data.get('exchange', 'NASDAQ')
                 screener = stock_data.get('screener', 'america')
@@ -141,13 +162,45 @@ class AnalysisService:
                     exchange=exchange,
                     screener=screener,
                 )
+                if not analysis:
+                    # Detect provider throttling and stop early to avoid burning limits.
+                    # fetch_analysis already logs the details.
+                    # We infer 429 from recent failures by symbol density and short cadence.
+                    consecutive_rate_limits += 1
+                    if consecutive_rate_limits >= 3:
+                        logger.warning("Analysis provider appears rate-limited; stopping this cycle early.")
+                        AnalysisService._last_status = "rate_limited"
+                        break
+                else:
+                    consecutive_rate_limits = 0
 
                 if analysis and analysis['recommendation'] in ['STRONG_BUY', 'STRONG_SELL', 'BUY', 'SELL']:
                     strong_signals.append(analysis)
 
+                # Mild pacing to reduce throttling pressure.
+                await asyncio.sleep(0.8)
+
         except Exception as e:
             logger.error(f"Failed to fetch stocks analysis: {e}")
 
+        if strong_signals:
+            AnalysisService._signals_cache = strong_signals
+            AnalysisService._signals_cache_at = datetime.now(timezone.utc)
+            AnalysisService._last_status = "ok"
+            return strong_signals
+
+        # Fall back to recent cached signals if provider is throttling.
+        if (
+            AnalysisService._last_status == "rate_limited"
+            and AnalysisService._signals_cache
+            and AnalysisService._signals_cache_at
+            and (datetime.now(timezone.utc) - AnalysisService._signals_cache_at)
+            <= timedelta(minutes=AnalysisService._cache_ttl_minutes)
+        ):
+            logger.warning("Using cached analysis signals due to temporary provider throttling.")
+            return AnalysisService._signals_cache
+
+        AnalysisService._last_status = "empty"
         return strong_signals
 
     @staticmethod

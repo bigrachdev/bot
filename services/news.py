@@ -16,6 +16,13 @@ from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY, MAX_NEWS_AGE_HOURS
 class NewsService:
     """Handle news fetching from multiple sources"""
     RELEVANCE_MAX_SCORE = 15
+    REQUEST_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
 
     TRUSTED_NEWS_SOURCES = {
         'reuters',
@@ -256,7 +263,11 @@ class NewsService:
         try:
             async with aiohttp.ClientSession() as session:
                 for feed_url in feed_urls:
-                    async with session.get(feed_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    async with session.get(
+                        feed_url,
+                        headers=NewsService.REQUEST_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
                         if resp.status != 200:
                             logger.warning(f"CNBC RSS returned {resp.status} for {feed_url}")
                             continue
@@ -305,13 +316,78 @@ class NewsService:
         return articles
 
     @staticmethod
+    async def fetch_news_public_rss() -> list:
+        """Fetch market headlines from public RSS feeds as a fallback path."""
+        feed_urls = [
+            "https://feeds.reuters.com/reuters/businessNews",
+            "https://feeds.marketwatch.com/marketwatch/topstories/",
+            "https://finance.yahoo.com/news/rssindex",
+        ]
+        articles = []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for feed_url in feed_urls:
+                    async with session.get(
+                        feed_url,
+                        headers=NewsService.REQUEST_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"Public RSS returned {resp.status} for {feed_url}")
+                            continue
+
+                        raw_xml = await resp.text()
+                        root = ET.fromstring(raw_xml)
+
+                        for item in root.findall(".//item"):
+                            title = (item.findtext("title") or "").strip()
+                            link = (item.findtext("link") or "").strip()
+                            description = (item.findtext("description") or "").strip()
+                            pub_date = (item.findtext("pubDate") or "").strip()
+                            if not title or not link:
+                                continue
+
+                            published = ""
+                            if pub_date:
+                                try:
+                                    published = parsedate_to_datetime(pub_date).isoformat()
+                                except Exception:
+                                    published = pub_date
+
+                            category = NewsService._classify_category(title, description, fallback='market')
+                            normalized = {
+                                'source': {'name': urlparse(link).netloc.replace("www.", "") or 'RSS'},
+                                'title': title,
+                                'description': description,
+                                'url': link,
+                                'publishedAt': published,
+                                'image_url': '',
+                                'video_url': '',
+                                'category': category,
+                            }
+
+                            if NewsService._is_trusted_source(
+                                normalized['source']['name'],
+                                normalized['url'],
+                            ):
+                                articles.append(normalized)
+        except Exception as e:
+            logger.error(f"Failed to fetch from public RSS feeds: {e}")
+
+        return articles
+
+    @staticmethod
     async def fetch_news_newsapi(keywords: list, category: str, per_keyword: int = 5) -> list:
         """Fetch curated news from NewsAPI.org for specific keywords."""
         articles = []
 
         try:
             async with aiohttp.ClientSession() as session:
+                saw_rate_limit = False
                 for keyword in keywords:
+                    if saw_rate_limit:
+                        break
                     from_time = (
                         datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
                     ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
@@ -346,10 +422,68 @@ class NewsService:
                                     articles.append(normalized)
                         else:
                             logger.warning(f"NewsAPI returned {resp.status} for keyword {keyword}")
+                            if resp.status == 429:
+                                saw_rate_limit = True
         except Exception as e:
             logger.error(f"Failed to fetch from NewsAPI: {e}")
 
         return articles
+
+    @staticmethod
+    async def fetch_news_newsapi_compact() -> list:
+        """Use two compact NewsAPI calls to reduce quota burn and 429 frequency."""
+        if not NEWSAPI_KEY:
+            return []
+
+        query_sets = [
+            ("(stock OR equities OR earnings OR guidance OR \"wall street\")", "market"),
+            ("(oil OR gold OR silver OR copper OR \"natural gas\" OR opec OR commodities)", "commodities"),
+        ]
+        all_articles = []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                from_time = (
+                    datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
+                ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+                for query, category in query_sets:
+                    url = (
+                        "https://newsapi.org/v2/everything"
+                        f"?q={quote(query)}"
+                        "&language=en"
+                        "&searchIn=title,description"
+                        "&sortBy=publishedAt"
+                        f"&from={quote(from_time)}"
+                        "&pageSize=20"
+                    )
+                    headers = {"X-Api-Key": NEWSAPI_KEY}
+
+                    async with session.get(
+                        url,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for raw in data.get("articles", []):
+                                normalized = NewsService._normalize_article(raw, category)
+                                if not normalized['title'] or not normalized['url']:
+                                    continue
+                                if not NewsService._is_trusted_source(
+                                    normalized['source']['name'],
+                                    normalized['url'],
+                                ):
+                                    continue
+                                all_articles.append(normalized)
+                        else:
+                            logger.warning(f"NewsAPI compact request returned {resp.status} for {category}")
+                            if resp.status == 429:
+                                break
+        except Exception as e:
+            logger.error(f"Failed compact NewsAPI fetch: {e}")
+
+        return all_articles
 
     @staticmethod
     async def fetch_news_alphavantage() -> list:
@@ -417,15 +551,24 @@ class NewsService:
             ]
 
             cnbc_articles = await NewsService.fetch_news_cnbc_rss()
+            public_rss_articles = await NewsService.fetch_news_public_rss()
+            compact_newsapi = await NewsService.fetch_news_newsapi_compact()
             market_articles = await NewsService.fetch_news_newsapi(
-                market_keywords, category='market', per_keyword=4
+                market_keywords, category='market', per_keyword=2
             )
             commodity_articles = await NewsService.fetch_news_newsapi(
-                commodity_keywords, category='commodities', per_keyword=4
+                commodity_keywords, category='commodities', per_keyword=2
             )
             av_articles = await NewsService.fetch_news_alphavantage()
 
-            all_articles = cnbc_articles + market_articles + commodity_articles + av_articles
+            all_articles = (
+                cnbc_articles
+                + public_rss_articles
+                + compact_newsapi
+                + market_articles
+                + commodity_articles
+                + av_articles
+            )
 
             # Deduplicate by exact normalized title hash.
             unique_articles = []
