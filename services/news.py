@@ -15,6 +15,7 @@ from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY, MAX_NEWS_AGE_HOURS
 
 class NewsService:
     """Handle news fetching from multiple sources"""
+    RELEVANCE_MAX_SCORE = 15
 
     TRUSTED_NEWS_SOURCES = {
         'reuters',
@@ -522,7 +523,7 @@ class NewsService:
             f"<b>{title}</b>\n\n"
             f"{description}\n\n"
             f"Source: <b>{source}</b>\n"
-            f"Relevance Score: <b>{score}/14</b>\n"
+            f"Relevance Score: <b>{score}/{NewsService.RELEVANCE_MAX_SCORE}</b>\n"
         )
         if published:
             caption += f"Published: {published} UTC\n"

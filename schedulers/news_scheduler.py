@@ -10,6 +10,41 @@ class NewsScheduler:
     """Handle scheduled news broadcasting"""
 
     @staticmethod
+    async def _send_article_with_fallback(bot_instance, chat_id: int, caption: str, image_url: str, video_url: str):
+        """Try rich media first, then fall back to plain text to avoid dropping posts."""
+        if video_url and NewsService._is_supported_video_url(video_url):
+            try:
+                await bot_instance.bot.send_video(
+                    chat_id=chat_id,
+                    video=video_url,
+                    caption=caption,
+                    parse_mode='HTML',
+                    supports_streaming=True,
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Video send failed for chat {chat_id}, falling back to text: {e}")
+
+        if image_url:
+            try:
+                await bot_instance.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=image_url,
+                    caption=caption,
+                    parse_mode='HTML',
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Photo send failed for chat {chat_id}, falling back to text: {e}")
+
+        await bot_instance.bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode='HTML',
+            disable_web_page_preview=False,
+        )
+
+    @staticmethod
     async def broadcast_news(bot_instance, chat_list: list = None):
         """Broadcast latest curated news as separate detailed posts."""
         try:
@@ -62,28 +97,13 @@ class NewsScheduler:
                     image_url = (article.get('image_url') or '').strip()
                     video_url = (article.get('video_url') or '').strip()
                     try:
-                        if video_url and NewsService._is_supported_video_url(video_url):
-                            await bot_instance.bot.send_video(
-                                chat_id=chat_id,
-                                video=video_url,
-                                caption=caption,
-                                parse_mode='HTML',
-                                supports_streaming=True,
-                            )
-                        elif image_url:
-                            await bot_instance.bot.send_photo(
-                                chat_id=chat_id,
-                                photo=image_url,
-                                caption=caption,
-                                parse_mode='HTML',
-                            )
-                        else:
-                            await bot_instance.bot.send_message(
-                                chat_id=chat_id,
-                                text=caption,
-                                parse_mode='HTML',
-                                disable_web_page_preview=False,
-                            )
+                        await NewsScheduler._send_article_with_fallback(
+                            bot_instance=bot_instance,
+                            chat_id=chat_id,
+                            caption=caption,
+                            image_url=image_url,
+                            video_url=video_url,
+                        )
                         sent_per_article[news_id] += 1
                         successful += 1
                     except Exception as e:
@@ -135,28 +155,13 @@ class NewsScheduler:
                 caption = NewsService.format_article_caption(article)
                 image_url = (article.get('image_url') or '').strip()
                 video_url = (article.get('video_url') or '').strip()
-                if video_url and NewsService._is_supported_video_url(video_url):
-                    await bot_instance.bot.send_video(
-                        chat_id=chat_id,
-                        video=video_url,
-                        caption=caption,
-                        parse_mode='HTML',
-                        supports_streaming=True,
-                    )
-                elif image_url:
-                    await bot_instance.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=image_url,
-                        caption=caption,
-                        parse_mode='HTML',
-                    )
-                else:
-                    await bot_instance.bot.send_message(
-                        chat_id=chat_id,
-                        text=caption,
-                        parse_mode='HTML',
-                        disable_web_page_preview=False,
-                    )
+                await NewsScheduler._send_article_with_fallback(
+                    bot_instance=bot_instance,
+                    chat_id=chat_id,
+                    caption=caption,
+                    image_url=image_url,
+                    video_url=video_url,
+                )
                 await asyncio.sleep(0.6)
 
             logger.info(f"News sent to chat {chat_id}")

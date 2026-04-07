@@ -10,6 +10,15 @@ class AnalysisService:
     """Handle technical analysis and signal detection"""
 
     @staticmethod
+    def _normalize_symbol_for_tradingview(symbol: str, exchange: str) -> str:
+        """Normalize symbols for TradingView-TA quirks (e.g., BRK-B -> BRK.B)."""
+        clean_symbol = (symbol or "").strip().upper()
+        clean_exchange = (exchange or "").strip().upper()
+        if clean_exchange in {"NYSE", "NASDAQ"} and "-" in clean_symbol:
+            return clean_symbol.replace("-", ".")
+        return clean_symbol
+
+    @staticmethod
     async def fetch_finnhub_indicators(symbol: str) -> dict:
         """Fetch technical indicators from Finnhub API"""
         indicators = {}
@@ -66,18 +75,25 @@ class AnalysisService:
         return indicators
 
     @staticmethod
-    async def fetch_analysis(symbol: str, market: str = 'STOCKS') -> dict:
+    async def fetch_analysis(
+        symbol: str,
+        market: str = 'STOCKS',
+        exchange: str = None,
+        screener: str = None,
+    ) -> dict:
         """Fetch technical analysis for a single symbol"""
         try:
             if market == 'STOCKS':
-                screener = "america"
-                exchange = "nasdaq"
+                screener = (screener or "america").lower()
+                exchange = (exchange or "nasdaq").lower()
             elif market == 'CRYPTO':
                 screener = "crypto"
                 exchange = "binance"
             else:  # FOREX
                 screener = "forex"
                 exchange = "fxstreet"
+
+            symbol = AnalysisService._normalize_symbol_for_tradingview(symbol, exchange)
 
             handler = TA_Handler(
                 symbol=symbol,
@@ -117,7 +133,14 @@ class AnalysisService:
         try:
             for stock_data in TOP_STOCKS[:10]:
                 symbol = stock_data['symbol']
-                analysis = await AnalysisService.fetch_analysis(symbol, 'STOCKS')
+                exchange = stock_data.get('exchange', 'NASDAQ')
+                screener = stock_data.get('screener', 'america')
+                analysis = await AnalysisService.fetch_analysis(
+                    symbol=symbol,
+                    market='STOCKS',
+                    exchange=exchange,
+                    screener=screener,
+                )
 
                 if analysis and analysis['recommendation'] in ['STRONG_BUY', 'STRONG_SELL', 'BUY', 'SELL']:
                     strong_signals.append(analysis)

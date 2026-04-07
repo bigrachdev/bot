@@ -3,12 +3,12 @@ Main bot initialization and event loop
 """
 import asyncio
 import signal
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application
 from telegram.error import Conflict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from utils.logger import setup_logging
-from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, TOP_STOCKS, TOP_FOREX, KEEP_ALIVE
+from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, KEEP_ALIVE
 from database.db import MarketBot
 from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers
@@ -42,6 +42,9 @@ async def setup_bot():
         application.bot_data['bot_instance'] = bot_instance
         application.bot_data['bot'] = application.bot
         bot_instance.bot = application.bot
+
+        target_chats = bot_instance.get_subscribed_chats()
+        logger.info(f"Initial broadcast targets loaded: {len(target_chats)} chats/channels")
         
         # Setup handlers
         setup_user_handlers(application)
@@ -129,7 +132,15 @@ async def main():
 
         # Trigger immediate warm-up news broadcast on startup so channels don't wait
         # until the next :00 cron window.
-        asyncio.create_task(NewsScheduler.broadcast_news(bot_instance))
+        warmup_task = asyncio.create_task(NewsScheduler.broadcast_news(bot_instance))
+        def _log_warmup_outcome(task: asyncio.Task):
+            if task.cancelled():
+                logger.warning("Warm-up news task was cancelled")
+                return
+            err = task.exception()
+            if err:
+                logger.error(f"Warm-up news task failed: {err}")
+        warmup_task.add_done_callback(_log_warmup_outcome)
 
         # Keep running until signalled to stop
         await stop_event.wait()
@@ -142,7 +153,8 @@ async def main():
             scheduler.shutdown()
             logger.info("✅ Scheduler shut down")
         
-        await application.updater.stop()
+        if application.updater:
+            await application.updater.stop()
         await application.stop()
         await application.shutdown()
         logger.info("✅ Bot shutdown complete")

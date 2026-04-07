@@ -66,7 +66,7 @@ For Enhanced Technical Analysis (optional but recommended):
 
  3. Run the Bot
 ```bash
-python signalbot.py
+python bot.py
 ```
 
 The bot will:

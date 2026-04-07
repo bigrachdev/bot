@@ -63,15 +63,18 @@ async def handle_market_buttons(update: Update, context: ContextTypes.DEFAULT_TY
 async def show_stocks_menu(query, context):
     """Show stocks pagination menu"""
     try:
-        page = int(query.data.split('_')[-1]) if '_' in query.data else 0
+        parts = query.data.split('_')
+        page = int(parts[-1]) if len(parts) > 2 and parts[-1].isdigit() else 0
         page_size = 5
         start = page * page_size
         end = start + page_size
         
         stocks = TOP_STOCKS[start:end]
         
-        keyboard = [[InlineKeyboardButton(symbol, callback_data=f'stock_{symbol}')] 
-                   for symbol in stocks]
+        keyboard = [
+            [InlineKeyboardButton(stock['name'], callback_data=f"stock_{stock['symbol']}")]
+            for stock in stocks
+        ]
         
         # Navigation buttons
         nav_buttons = []
@@ -99,15 +102,18 @@ async def show_stocks_menu(query, context):
 async def show_forex_menu(query, context):
     """Show forex pagination menu"""
     try:
-        page = int(query.data.split('_')[-1]) if '_' in query.data else 0
+        parts = query.data.split('_')
+        page = int(parts[-1]) if len(parts) > 2 and parts[-1].isdigit() else 0
         page_size = 5
         start = page * page_size
         end = start + page_size
         
         forex = TOP_FOREX[start:end]
         
-        keyboard = [[InlineKeyboardButton(symbol, callback_data=f'forex_{symbol}')] 
-                   for symbol in forex]
+        keyboard = [
+            [InlineKeyboardButton(pair['name'], callback_data=f"forex_{pair['symbol']}")]
+            for pair in forex
+        ]
         
         # Navigation buttons
         nav_buttons = []
