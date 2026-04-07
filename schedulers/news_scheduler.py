@@ -47,8 +47,17 @@ class NewsScheduler:
                 for news_id, article in fresh_articles:
                     caption = NewsService.format_article_caption(article)
                     image_url = (article.get('image_url') or '').strip()
+                    video_url = (article.get('video_url') or '').strip()
                     try:
-                        if image_url:
+                        if video_url and NewsService._is_supported_video_url(video_url):
+                            await bot_instance.bot.send_video(
+                                chat_id=chat_id,
+                                video=video_url,
+                                caption=caption,
+                                parse_mode='HTML',
+                                supports_streaming=True,
+                            )
+                        elif image_url:
                             await bot_instance.bot.send_photo(
                                 chat_id=chat_id,
                                 photo=image_url,
@@ -105,7 +114,16 @@ class NewsScheduler:
             for article in articles:
                 caption = NewsService.format_article_caption(article)
                 image_url = (article.get('image_url') or '').strip()
-                if image_url:
+                video_url = (article.get('video_url') or '').strip()
+                if video_url and NewsService._is_supported_video_url(video_url):
+                    await bot_instance.bot.send_video(
+                        chat_id=chat_id,
+                        video=video_url,
+                        caption=caption,
+                        parse_mode='HTML',
+                        supports_streaming=True,
+                    )
+                elif image_url:
                     await bot_instance.bot.send_photo(
                         chat_id=chat_id,
                         photo=image_url,

@@ -46,7 +46,9 @@ class NewsService:
         'finance.yahoo.com',
         'seekingalpha.com',
         'forbes.com',
-        )
+    )
+
+    SUPPORTED_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
 
     @staticmethod
     def _classify_category(title: str, description: str, fallback: str = 'market') -> str:
@@ -83,6 +85,12 @@ class NewsService:
     def _normalize_article(raw: dict, category: str) -> dict:
         """Normalize article shape across providers."""
         source_name = raw.get('source', {}).get('name', 'Unknown')
+        video_url = (
+            raw.get('urlToVideo')
+            or raw.get('video_url')
+            or raw.get('video')
+            or ''
+        )
         return {
             'source': {'name': source_name},
             'title': (raw.get('title') or '').strip(),
@@ -90,8 +98,36 @@ class NewsService:
             'url': (raw.get('url') or '').strip(),
             'publishedAt': (raw.get('publishedAt') or '').strip(),
             'image_url': (raw.get('urlToImage') or '').strip(),
+            'video_url': (video_url or '').strip(),
             'category': category,
         }
+
+    @staticmethod
+    def _extract_video_from_rss_item(item) -> str:
+        """Extract direct video URL from RSS item when available."""
+        # Standard RSS enclosure tag.
+        enclosure = item.find("enclosure")
+        if enclosure is not None:
+            url = (enclosure.attrib.get("url") or "").strip()
+            media_type = (enclosure.attrib.get("type") or "").lower()
+            if url and ("video" in media_type or NewsService._is_supported_video_url(url)):
+                return url
+
+        # media:content tag with namespace.
+        media_nodes = item.findall("{http://search.yahoo.com/mrss/}content")
+        for media_node in media_nodes:
+            url = (media_node.attrib.get("url") or "").strip()
+            media_type = (media_node.attrib.get("type") or "").lower()
+            if url and ("video" in media_type or NewsService._is_supported_video_url(url)):
+                return url
+
+        return ""
+
+    @staticmethod
+    def _is_supported_video_url(video_url: str) -> bool:
+        """Check if URL looks like a directly playable short video."""
+        video_url = (video_url or "").lower().split("?")[0]
+        return any(video_url.endswith(ext) for ext in NewsService.SUPPORTED_VIDEO_EXTENSIONS)
 
     @staticmethod
     async def fetch_news_cnbc_rss() -> list:
@@ -138,6 +174,7 @@ class NewsService:
                                 'url': link,
                                 'publishedAt': published,
                                 'image_url': '',
+                                'video_url': NewsService._extract_video_from_rss_item(item),
                                 'category': category,
                             }
 
@@ -223,6 +260,7 @@ class NewsService:
                                     'url': (item.get('url') or '').strip(),
                                     'publishedAt': published,
                                     'image_url': (item.get('banner_image') or '').strip(),
+                                    'video_url': '',
                                     'category': 'market',
                                 }
                                 if not normalized['title'] or not normalized['url']:
