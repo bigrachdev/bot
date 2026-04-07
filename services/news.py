@@ -105,6 +105,7 @@ class NewsService:
         'supply',
         'forecast',
     )
+    SOURCE_MAX_PER_CYCLE = 2
 
     @staticmethod
     def _parse_published_time(value: str) -> datetime:
@@ -360,50 +361,53 @@ class NewsService:
         try:
             async with aiohttp.ClientSession() as session:
                 for feed_url in feed_urls:
-                    async with session.get(
-                        feed_url,
-                        headers=NewsService.REQUEST_HEADERS,
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    ) as resp:
-                        if resp.status != 200:
-                            logger.warning(f"Public RSS returned {resp.status} for {feed_url}")
-                            continue
-
-                        raw_xml = await resp.text()
-                        root = ET.fromstring(raw_xml)
-
-                        for item in root.findall(".//item"):
-                            title = (item.findtext("title") or "").strip()
-                            link = (item.findtext("link") or "").strip()
-                            description = (item.findtext("description") or "").strip()
-                            pub_date = (item.findtext("pubDate") or "").strip()
-                            if not title or not link:
+                    try:
+                        async with session.get(
+                            feed_url,
+                            headers=NewsService.REQUEST_HEADERS,
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        ) as resp:
+                            if resp.status != 200:
+                                logger.warning(f"Public RSS returned {resp.status} for {feed_url}")
                                 continue
 
-                            published = ""
-                            if pub_date:
-                                try:
-                                    published = parsedate_to_datetime(pub_date).isoformat()
-                                except Exception:
-                                    published = pub_date
+                            raw_xml = await resp.text()
+                            root = ET.fromstring(raw_xml)
 
-                            category = NewsService._classify_category(title, description, fallback='market')
-                            normalized = {
-                                'source': {'name': urlparse(link).netloc.replace("www.", "") or 'RSS'},
-                                'title': title,
-                                'description': description,
-                                'url': link,
-                                'publishedAt': published,
-                                'image_url': '',
-                                'video_url': '',
-                                'category': category,
-                            }
+                            for item in root.findall(".//item"):
+                                title = (item.findtext("title") or "").strip()
+                                link = (item.findtext("link") or "").strip()
+                                description = (item.findtext("description") or "").strip()
+                                pub_date = (item.findtext("pubDate") or "").strip()
+                                if not title or not link:
+                                    continue
 
-                            if NewsService._is_trusted_source(
-                                normalized['source']['name'],
-                                normalized['url'],
-                            ):
-                                articles.append(normalized)
+                                published = ""
+                                if pub_date:
+                                    try:
+                                        published = parsedate_to_datetime(pub_date).isoformat()
+                                    except Exception:
+                                        published = pub_date
+
+                                category = NewsService._classify_category(title, description, fallback='market')
+                                normalized = {
+                                    'source': {'name': urlparse(link).netloc.replace("www.", "") or 'RSS'},
+                                    'title': title,
+                                    'description': description,
+                                    'url': link,
+                                    'publishedAt': published,
+                                    'image_url': '',
+                                    'video_url': '',
+                                    'category': category,
+                                }
+
+                                if NewsService._is_trusted_source(
+                                    normalized['source']['name'],
+                                    normalized['url'],
+                                ):
+                                    articles.append(normalized)
+                    except Exception as feed_err:
+                        logger.warning(f"Public RSS parse/fetch failed for {feed_url}: {feed_err}")
         except Exception as e:
             logger.error(f"Failed to fetch from public RSS feeds: {e}")
 
@@ -601,6 +605,15 @@ class NewsService:
                 + commodity_articles
                 + av_articles
             )
+            logger.info(
+                "News source counts | CNBC=%d PublicRSS=%d NewsAPICompact=%d NewsAPI=%d CommoditiesAPI=%d AlphaVantage=%d",
+                len(cnbc_articles),
+                len(public_rss_articles),
+                len(compact_newsapi),
+                len(market_articles),
+                len(commodity_articles),
+                len(av_articles),
+            )
 
             # Deduplicate by exact normalized title hash.
             unique_articles = []
@@ -643,6 +656,7 @@ class NewsService:
                 reverse=True,
             )
 
+            # Prefer mix of categories, then enforce source diversity so output is not single-source.
             selected = market_sorted[:4] + commodity_sorted[:3]
             if len(selected) < 6:
                 combined_ranked = sorted(focused_articles, key=sort_key, reverse=True)
@@ -655,7 +669,26 @@ class NewsService:
                         seen_urls.add(url)
                     if len(selected) >= 7:
                         break
-            return selected[:7]
+            source_balanced = []
+            source_counts = {}
+            seen_urls_balanced = set()
+            for candidate in sorted(selected, key=sort_key, reverse=True):
+                source = (candidate.get('source', {}).get('name', 'unknown') or 'unknown').lower()
+                url = NewsService._canonicalize_url(candidate.get('url', ''))
+                if not url or url in seen_urls_balanced:
+                    continue
+                if source_counts.get(source, 0) >= NewsService.SOURCE_MAX_PER_CYCLE:
+                    continue
+                source_balanced.append(candidate)
+                source_counts[source] = source_counts.get(source, 0) + 1
+                seen_urls_balanced.add(url)
+                if len(source_balanced) >= 7:
+                    break
+
+            if len(source_balanced) < 4:
+                # If balancing over-restricts a thin cycle, fall back to ranked selection.
+                return selected[:7]
+            return source_balanced[:7]
 
         except Exception as e:
             logger.error(f"Failed to fetch all news: {e}")
