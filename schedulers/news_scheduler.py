@@ -11,7 +11,7 @@ class NewsScheduler:
 
     @staticmethod
     async def broadcast_news(bot_instance, chat_list: list = None):
-        """Broadcast latest news to subscribed chats"""
+        """Broadcast latest curated news as separate detailed posts."""
         try:
             logger.info("Starting news broadcast...")
 
@@ -21,9 +21,6 @@ class NewsScheduler:
                 logger.warning("No articles fetched for broadcast")
                 return
 
-            # Format message
-            message = NewsService.format_news_message(articles)
-
             # Get subscribed chats if not provided
             if chat_list is None:
                 chat_list = bot_instance.get_subscribed_chats()
@@ -32,40 +29,59 @@ class NewsScheduler:
                 logger.info("No subscribed chats for news broadcast")
                 return
 
-            # Dedup against latest headline before sending
-            news_id = f"{articles[0].get('title', '')[:50]}".lower().replace(' ', '_')
-            if bot_instance.is_news_cached(news_id):
-                logger.info("Latest news already cached, skipping broadcast")
+            fresh_articles = []
+            for article in articles:
+                news_id = NewsService.make_news_id(article)
+                if not bot_instance.is_news_cached(news_id):
+                    fresh_articles.append((news_id, article))
+
+            if not fresh_articles:
+                logger.info("All curated articles are already cached; skipping broadcast")
                 return
 
-            # Send to each subscribed chat
             successful = 0
             failed = 0
+            sent_per_article = {news_id: 0 for news_id, _ in fresh_articles}
 
             for chat_id, _chat_type in chat_list:
-                try:
-                    await bot_instance.bot.send_message(
-                        chat_id=chat_id,
-                        text=message,
-                        parse_mode='HTML',
-                        disable_web_page_preview=False,
+                for news_id, article in fresh_articles:
+                    caption = NewsService.format_article_caption(article)
+                    image_url = (article.get('image_url') or '').strip()
+                    try:
+                        if image_url:
+                            await bot_instance.bot.send_photo(
+                                chat_id=chat_id,
+                                photo=image_url,
+                                caption=caption,
+                                parse_mode='HTML',
+                            )
+                        else:
+                            await bot_instance.bot.send_message(
+                                chat_id=chat_id,
+                                text=caption,
+                                parse_mode='HTML',
+                                disable_web_page_preview=False,
+                            )
+                        sent_per_article[news_id] += 1
+                        successful += 1
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to send article '{article.get('title', '')[:40]}' to chat {chat_id}: {e}"
+                        )
+                        failed += 1
+
+                    # Brief delay to avoid rate limiting
+                    await asyncio.sleep(0.6)
+
+            # Cache article after it was posted to at least one chat.
+            for news_id, article in fresh_articles:
+                if sent_per_article.get(news_id, 0) > 0:
+                    bot_instance.cache_news(
+                        news_id,
+                        article.get('title', ''),
+                        article.get('source', {}).get('name', 'Unknown'),
+                        article.get('url', ''),
                     )
-                    successful += 1
-                except Exception as e:
-                    logger.error(f"Failed to send news to chat {chat_id}: {e}")
-                    failed += 1
-
-                # Brief delay to avoid rate limiting
-                await asyncio.sleep(0.5)
-
-            # Cache only after at least one successful send
-            if successful > 0:
-                bot_instance.cache_news(
-                    news_id,
-                    articles[0].get('title', ''),
-                    articles[0].get('source', {}).get('name', 'Unknown'),
-                    articles[0].get('url', ''),
-                )
 
             logger.info(f"News broadcast complete: {successful} successful, {failed} failed")
 
@@ -74,19 +90,36 @@ class NewsScheduler:
 
     @staticmethod
     async def send_news_to_chat(bot_instance, chat_id: int):
-        """Send current news to a specific chat"""
+        """Send current curated news to a specific chat as separate article posts."""
         try:
             logger.info(f"Fetching news for chat {chat_id}...")
 
             articles = await NewsService.fetch_all_news()
-            message = NewsService.format_news_message(articles)
+            if not articles:
+                await bot_instance.bot.send_message(
+                    chat_id=chat_id,
+                    text="No high-quality market news found right now. Please try again later.",
+                )
+                return
 
-            await bot_instance.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode='HTML',
-                disable_web_page_preview=False,
-            )
+            for article in articles:
+                caption = NewsService.format_article_caption(article)
+                image_url = (article.get('image_url') or '').strip()
+                if image_url:
+                    await bot_instance.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=image_url,
+                        caption=caption,
+                        parse_mode='HTML',
+                    )
+                else:
+                    await bot_instance.bot.send_message(
+                        chat_id=chat_id,
+                        text=caption,
+                        parse_mode='HTML',
+                        disable_web_page_preview=False,
+                    )
+                await asyncio.sleep(0.6)
 
             logger.info(f"News sent to chat {chat_id}")
 

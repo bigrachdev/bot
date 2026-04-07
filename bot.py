@@ -13,6 +13,7 @@ from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers
 from schedulers.news_scheduler import NewsScheduler
 from schedulers.analysis_scheduler import AnalysisScheduler
+from schedulers.ad_scheduler import AdScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
 # Initialize logger
@@ -67,6 +68,15 @@ async def setup_bot():
             name='Broadcast analysis every 30 minutes'
         )
 
+        # Schedule Omnex ad broadcast every 4 hours
+        scheduler.add_job(
+            AdScheduler.broadcast_omnex_ad,
+            CronTrigger(hour='*/4', minute=15),
+            args=[bot_instance],
+            id='omnex_ad_broadcast',
+            name='Broadcast Omnex ad every 4 hours'
+        )
+
         # Start the scheduler
         scheduler.start()
         logger.info("✅ Scheduler started")
@@ -77,6 +87,7 @@ async def setup_bot():
         logger.info("✅ Schedulers configured")
         logger.info("📰 News broadcast: Every hour at :00")
         logger.info("📈 Analysis broadcast: Every hour at :30")
+        logger.info("💼 Omnex ad broadcast: Every 4 hours at :15")
 
         return application
         
