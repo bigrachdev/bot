@@ -3,12 +3,9 @@ Main bot initialization and event loop
 """
 import asyncio
 import signal
-from datetime import datetime, timedelta, timezone
 from telegram.ext import Application
 from telegram.error import Conflict
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
-from apscheduler.triggers.interval import IntervalTrigger
+
 from utils.logger import setup_logging
 from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, KEEP_ALIVE
 from database.db import MarketBot
@@ -19,29 +16,54 @@ from schedulers.analysis_scheduler import AnalysisScheduler
 from schedulers.ad_scheduler import AdScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
-# Initialize logger
+
 logger = setup_logging()
 
-# Global bot instance and stop event
 bot_instance = None
 stop_event: asyncio.Event = None
 
+NEWS_INTERVAL_SECONDS = 15 * 60
+ANALYSIS_INTERVAL_SECONDS = 60 * 60
+AD_INTERVAL_SECONDS = 4 * 60 * 60
 
-def _scheduler_listener(event):
-    """Log APScheduler job outcomes for observability."""
-    if event.code == EVENT_JOB_EXECUTED:
-        logger.info(f"Scheduled job executed successfully: {event.job_id}")
-    elif event.code == EVENT_JOB_MISSED:
-        logger.warning(f"Scheduled job MISSED: {event.job_id}")
-    elif event.code == EVENT_JOB_ERROR:
-        logger.error(f"Scheduled job failed: {event.job_id}", exc_info=event.exception)
+
+async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
+    """Run one job forever with self-healing retries."""
+    logger.info(f"{name} loop started (interval={interval_seconds}s)")
+    loop = asyncio.get_running_loop()
+    next_run = loop.time() + interval_seconds
+
+    while not stop_event.is_set():
+        wait_seconds = max(0.0, next_run - loop.time())
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=wait_seconds)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        if stop_event.is_set():
+            break
+
+        try:
+            logger.info(f"{name}: execution started")
+            await job_coro(bot_instance)
+            logger.info(f"{name}: execution completed")
+            next_run = loop.time() + interval_seconds
+        except Exception as e:
+            logger.error(f"{name}: execution failed: {e}")
+            # Retry sooner after failure rather than waiting full interval.
+            next_run = loop.time() + min(300, interval_seconds)
+
+    logger.info(f"{name} loop stopped")
+
 
 async def startup_auto_broadcast(
     bot_instance,
     max_wait_seconds: int = 600,
     poll_interval_seconds: int = 20,
 ):
-    """Wait for at least one target chat/channel, then auto-broadcast without admin commands."""
+    """Wait for targets, then run immediate startup broadcasts."""
     elapsed = 0
     while elapsed <= max_wait_seconds:
         chat_list = bot_instance.get_subscribed_chats()
@@ -53,6 +75,7 @@ async def startup_auto_broadcast(
                 await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
             except Exception as e:
                 logger.error(f"Startup news broadcast failed: {e}")
+
             try:
                 await AdScheduler.broadcast_omnex_ad(bot_instance, chat_list=chat_list)
             except Exception as e:
@@ -66,110 +89,57 @@ async def startup_auto_broadcast(
 
     logger.warning(
         "Startup auto-broadcast timed out without detected targets. "
-        "Scheduler jobs remain active and will continue retrying."
+        "Periodic loops remain active and will continue retrying."
     )
 
+
 async def setup_bot():
-    """Initialize bot, database, and handlers"""
+    """Initialize bot, database, and handlers."""
     global bot_instance
-    
+
     try:
-        logger.info("🚀 Initializing Market Bot...")
-        
-        # Initialize database
+        logger.info("Initializing Market Bot...")
+
         bot_instance = MarketBot(YOUR_ADMIN_ID)
-        logger.info("✅ Database initialized")
-        
-        # Create Telegram application
+        logger.info("Database initialized")
+
         application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Store bot_instance in application context for access in handlers
-        application.bot_data['bot_instance'] = bot_instance
-        application.bot_data['bot'] = application.bot
+
+        application.bot_data["bot_instance"] = bot_instance
+        application.bot_data["bot"] = application.bot
         bot_instance.bot = application.bot
 
         target_chats = bot_instance.get_subscribed_chats()
         logger.info(f"Initial broadcast targets loaded: {len(target_chats)} chats/channels")
-        
-        # Setup handlers
+
         setup_user_handlers(application)
         setup_admin_handlers(application)
-        logger.info("✅ Command handlers registered")
-        
-        # Setup scheduler for broadcasts
-        scheduler = AsyncIOScheduler(
-            timezone="UTC",
-            job_defaults={
-                "coalesce": True,
-                "max_instances": 1,
-                "misfire_grace_time": 3600,  # Tolerate delayed wakeups/restarts.
-            },
-        )
-        scheduler.add_listener(
-            _scheduler_listener,
-            EVENT_JOB_EXECUTED | EVENT_JOB_MISSED | EVENT_JOB_ERROR,
-        )
+        logger.info("Command handlers registered")
 
-        now_utc = datetime.now(timezone.utc)
-
-        # Schedule news broadcast every 15 minutes.
-        scheduler.add_job(
-            NewsScheduler.broadcast_news,
-            IntervalTrigger(minutes=15, start_date=now_utc + timedelta(minutes=15)),
-            args=[bot_instance],
-            id='news_broadcast',
-            name='Broadcast news every 15 minutes'
-        )
-
-        # Schedule analysis broadcast every hour.
-        scheduler.add_job(
-            AnalysisScheduler.broadcast_analysis,
-            IntervalTrigger(hours=1, start_date=now_utc + timedelta(hours=1)),
-            args=[bot_instance],
-            id='analysis_broadcast',
-            name='Broadcast analysis every hour'
-        )
-
-        # Schedule Omnex ad broadcast every 4 hours.
-        scheduler.add_job(
-            AdScheduler.broadcast_omnex_ad,
-            IntervalTrigger(hours=4, start_date=now_utc + timedelta(hours=4)),
-            args=[bot_instance],
-            id='omnex_ad_broadcast',
-            name='Broadcast Omnex ad every 4 hours'
-        )
-
-        # Start the scheduler
-        scheduler.start()
-        logger.info("✅ Scheduler started")
-
-        # Store scheduler in application context for cleanup
-        application.bot_data['scheduler'] = scheduler
-
-        logger.info("Schedulers configured")
-        logger.info("News broadcast: Every 15 minutes")
-        logger.info("Analysis broadcast: Every hour")
-        logger.info("Omnex ad broadcast: Every 4 hours")
-        for job in scheduler.get_jobs():
-            logger.info(f"Scheduled job registered: id={job.id}, next_run={job.next_run_time}")
+        logger.info("Periodic broadcasters configured")
+        logger.info("News broadcast interval: 15 minutes")
+        logger.info("Analysis broadcast interval: 1 hour")
+        logger.info("Omnex ad broadcast interval: 4 hours")
 
         return application
-        
+
     except Exception as e:
-        logger.error(f"❌ Failed to initialize bot: {e}")
+        logger.error(f"Failed to initialize bot: {e}")
         raise
 
+
 async def main():
-    """Main async entry point"""
-    # Start keep-alive server if enabled
+    """Main async entry point."""
     if KEEP_ALIVE:
         start_keep_alive()
         asyncio.create_task(ping_server())
-        logger.info("✅ Keep-alive pings scheduled")
+        logger.info("Keep-alive pings scheduled")
 
     application = await setup_bot()
 
-    logger.info("🌐 Starting bot polling...")
+    logger.info("Starting bot polling...")
+    periodic_tasks = []
+
     try:
         def on_polling_error(exc: Exception):
             """Stop this instance when Telegram reports concurrent polling."""
@@ -185,13 +155,14 @@ async def main():
         await application.start()
         await application.updater.start_polling(
             poll_interval=1.0,
-            allowed_updates=['message', 'callback_query'],
+            allowed_updates=["message", "callback_query"],
             drop_pending_updates=True,
             error_callback=on_polling_error,
         )
 
-        # Auto-start broadcasting as soon as targets are detected.
+        # Fire immediate startup posts when a target exists.
         warmup_task = asyncio.create_task(startup_auto_broadcast(bot_instance))
+
         def _log_warmup_outcome(task: asyncio.Task):
             if task.cancelled():
                 logger.warning("Startup auto-broadcast task was cancelled")
@@ -199,26 +170,40 @@ async def main():
             err = task.exception()
             if err:
                 logger.error(f"Startup auto-broadcast task failed: {err}")
+
         warmup_task.add_done_callback(_log_warmup_outcome)
 
-        # Keep running until signalled to stop
+        # Durable periodic loops (self-healing).
+        periodic_tasks = [
+            asyncio.create_task(
+                _run_periodic_job("news_broadcast", NEWS_INTERVAL_SECONDS, NewsScheduler.broadcast_news)
+            ),
+            asyncio.create_task(
+                _run_periodic_job("analysis_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis)
+            ),
+            asyncio.create_task(
+                _run_periodic_job("omnex_ad_broadcast", AD_INTERVAL_SECONDS, AdScheduler.broadcast_omnex_ad)
+            ),
+        ]
+
         await stop_event.wait()
+
     except asyncio.CancelledError:
-        logger.info("⏹️ Bot stopped")
+        logger.info("Bot stopped")
     finally:
-        # Shutdown scheduler
-        scheduler = application.bot_data.get('scheduler')
-        if scheduler:
-            scheduler.shutdown()
-            logger.info("✅ Scheduler shut down")
-        
+        for task in periodic_tasks:
+            task.cancel()
+        if periodic_tasks:
+            await asyncio.gather(*periodic_tasks, return_exceptions=True)
+
         if application.updater:
             await application.updater.stop()
         await application.stop()
         await application.shutdown()
-        logger.info("✅ Bot shutdown complete")
+        logger.info("Bot shutdown complete")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -234,8 +219,6 @@ if __name__ == '__main__':
     try:
         loop.run_until_complete(main())
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
     finally:
         loop.close()
-
-
