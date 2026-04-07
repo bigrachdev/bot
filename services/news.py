@@ -3,10 +3,11 @@ News fetching and formatting service
 """
 import aiohttp
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import escape
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 from utils.logger import logger
@@ -54,6 +55,8 @@ class NewsService:
         'finance.yahoo.com',
         'seekingalpha.com',
         'forbes.com',
+        'nasdaq.com',
+        'kitco.com',
     )
 
     SUPPORTED_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
@@ -204,6 +207,32 @@ class NewsService:
         return any(domain.endswith(allowed) for allowed in NewsService.TRUSTED_NEWS_DOMAINS)
 
     @staticmethod
+    def _canonicalize_url(url: str) -> str:
+        """Normalize URL for stronger duplicate detection."""
+        raw = (url or '').strip()
+        if not raw:
+            return ''
+        try:
+            parsed = urlparse(raw)
+            scheme = parsed.scheme.lower() or "https"
+            netloc = parsed.netloc.lower().replace("www.", "")
+            path = re.sub(r"/+", "/", parsed.path).rstrip("/")
+            return urlunparse((scheme, netloc, path, "", "", ""))
+        except Exception:
+            return raw.lower()
+
+    @staticmethod
+    def _normalize_title_for_dedupe(title: str) -> str:
+        """Normalize headline text so near-identical reposts collapse into one."""
+        t = (title or "").lower().strip()
+        # Remove common source suffixes like " - cnbc" or " | reuters".
+        t = re.sub(r"\s*[-|]\s*(cnbc|reuters|bloomberg|marketwatch|yahoo finance|investing\.com)\s*$", "", t)
+        # Remove non-alphanumerics for rough semantic dedupe.
+        t = re.sub(r"[^a-z0-9\s]", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    @staticmethod
     def _normalize_article(raw: dict, category: str) -> dict:
         """Normalize article shape across providers."""
         source_name = raw.get('source', {}).get('name', 'Unknown')
@@ -322,6 +351,9 @@ class NewsService:
             "https://feeds.reuters.com/reuters/businessNews",
             "https://feeds.marketwatch.com/marketwatch/topstories/",
             "https://finance.yahoo.com/news/rssindex",
+            "https://www.investing.com/rss/news_25.rss",
+            "https://www.nasdaq.com/feed/rssoutbound?category=Markets",
+            "https://www.kitco.com/rss/news",
         ]
         articles = []
 
@@ -577,10 +609,12 @@ class NewsService:
 
             for article in all_articles:
                 title = article.get('title', '')
-                title_hash = hashlib.md5(title.lower().strip().encode()).hexdigest()
-                url = article.get('url', '').strip().lower()
+                title_norm = NewsService._normalize_title_for_dedupe(title)
+                title_hash = hashlib.md5(title_norm.encode()).hexdigest()
+                url = NewsService._canonicalize_url(article.get('url', ''))
 
                 if title_hash not in seen_titles and url not in seen_urls:
+                    article['url'] = url
                     unique_articles.append(article)
                     seen_titles.add(title_hash)
                     seen_urls.add(url)
@@ -612,10 +646,11 @@ class NewsService:
             selected = market_sorted[:4] + commodity_sorted[:3]
             if len(selected) < 6:
                 combined_ranked = sorted(focused_articles, key=sort_key, reverse=True)
-                seen_urls = {a.get('url', '') for a in selected}
+                seen_urls = {NewsService._canonicalize_url(a.get('url', '')) for a in selected}
                 for candidate in combined_ranked:
-                    url = candidate.get('url', '')
+                    url = NewsService._canonicalize_url(candidate.get('url', ''))
                     if url and url not in seen_urls:
+                        candidate['url'] = url
                         selected.append(candidate)
                         seen_urls.add(url)
                     if len(selected) >= 7:
@@ -629,7 +664,9 @@ class NewsService:
     @staticmethod
     def make_news_id(article: dict) -> str:
         """Generate stable cache key for an article."""
-        seed = f"{article.get('url', '')}|{article.get('title', '')}".lower().strip()
+        canonical_url = NewsService._canonicalize_url(article.get('url', ''))
+        normalized_title = NewsService._normalize_title_for_dedupe(article.get('title', ''))
+        seed = f"{canonical_url}|{normalized_title}".lower().strip()
         return hashlib.md5(seed.encode()).hexdigest()
 
     @staticmethod
