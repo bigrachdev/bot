@@ -106,6 +106,8 @@ class NewsService:
         'forecast',
     )
     SOURCE_MAX_PER_CYCLE = 2
+    NEWSAPI_COOLDOWN_HOURS = 6
+    _newsapi_cooldown_until = None
 
     @staticmethod
     def _parse_published_time(value: str) -> datetime:
@@ -255,6 +257,24 @@ class NewsService:
         }
 
     @staticmethod
+    def _newsapi_in_cooldown() -> bool:
+        """True when NewsAPI is temporarily disabled due to recent 429."""
+        if NewsService._newsapi_cooldown_until is None:
+            return False
+        return datetime.now(timezone.utc) < NewsService._newsapi_cooldown_until
+
+    @staticmethod
+    def _activate_newsapi_cooldown() -> None:
+        """Back off NewsAPI calls for a while after hitting rate limits."""
+        NewsService._newsapi_cooldown_until = datetime.now(timezone.utc) + timedelta(
+            hours=NewsService.NEWSAPI_COOLDOWN_HOURS
+        )
+        logger.warning(
+            "NewsAPI rate-limited; skipping NewsAPI fetches until %s UTC",
+            NewsService._newsapi_cooldown_until.replace(microsecond=0).isoformat(),
+        )
+
+    @staticmethod
     def _extract_video_from_rss_item(item) -> str:
         """Extract direct video URL from RSS item when available."""
         # Standard RSS enclosure tag.
@@ -349,12 +369,11 @@ class NewsService:
     async def fetch_news_public_rss() -> list:
         """Fetch market headlines from public RSS feeds as a fallback path."""
         feed_urls = [
-            "https://feeds.reuters.com/reuters/businessNews",
             "https://feeds.marketwatch.com/marketwatch/topstories/",
             "https://finance.yahoo.com/news/rssindex",
             "https://www.investing.com/rss/news_25.rss",
             "https://www.nasdaq.com/feed/rssoutbound?category=Markets",
-            "https://www.kitco.com/rss/news",
+            "https://www.nasdaq.com/feed/rssoutbound?category=Commodities",
         ]
         articles = []
 
@@ -368,7 +387,10 @@ class NewsService:
                             timeout=aiohttp.ClientTimeout(total=10),
                         ) as resp:
                             if resp.status != 200:
-                                logger.warning(f"Public RSS returned {resp.status} for {feed_url}")
+                                if 500 <= resp.status < 600:
+                                    logger.warning(f"Public RSS returned {resp.status} for {feed_url}")
+                                else:
+                                    logger.info(f"Public RSS returned {resp.status} for {feed_url}")
                                 continue
 
                             raw_xml = await resp.text()
@@ -407,7 +429,7 @@ class NewsService:
                                 ):
                                     articles.append(normalized)
                     except Exception as feed_err:
-                        logger.warning(f"Public RSS parse/fetch failed for {feed_url}: {feed_err}")
+                        logger.info(f"Public RSS parse/fetch failed for {feed_url}: {feed_err}")
         except Exception as e:
             logger.error(f"Failed to fetch from public RSS feeds: {e}")
 
@@ -417,6 +439,10 @@ class NewsService:
     async def fetch_news_newsapi(keywords: list, category: str, per_keyword: int = 5) -> list:
         """Fetch curated news from NewsAPI.org for specific keywords."""
         articles = []
+        if not NEWSAPI_KEY:
+            return []
+        if NewsService._newsapi_in_cooldown():
+            return []
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -460,6 +486,7 @@ class NewsService:
                             logger.warning(f"NewsAPI returned {resp.status} for keyword {keyword}")
                             if resp.status == 429:
                                 saw_rate_limit = True
+                                NewsService._activate_newsapi_cooldown()
         except Exception as e:
             logger.error(f"Failed to fetch from NewsAPI: {e}")
 
@@ -469,6 +496,8 @@ class NewsService:
     async def fetch_news_newsapi_compact() -> list:
         """Use two compact NewsAPI calls to reduce quota burn and 429 frequency."""
         if not NEWSAPI_KEY:
+            return []
+        if NewsService._newsapi_in_cooldown():
             return []
 
         query_sets = [
@@ -515,6 +544,7 @@ class NewsService:
                         else:
                             logger.warning(f"NewsAPI compact request returned {resp.status} for {category}")
                             if resp.status == 429:
+                                NewsService._activate_newsapi_cooldown()
                                 break
         except Exception as e:
             logger.error(f"Failed compact NewsAPI fetch: {e}")
@@ -525,6 +555,8 @@ class NewsService:
     async def fetch_news_alphavantage() -> list:
         """Fetch additional market news from Alpha Vantage."""
         articles = []
+        if not ALPHAVANTAGE_KEY:
+            return []
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -561,7 +593,7 @@ class NewsService:
                                     continue
                                 articles.append(normalized)
                         else:
-                            logger.warning("Alpha Vantage returned no feed data")
+                            logger.info("Alpha Vantage returned no feed data")
                     else:
                         logger.warning(f"Alpha Vantage returned {resp.status}")
         except Exception as e:
@@ -589,12 +621,15 @@ class NewsService:
             cnbc_articles = await NewsService.fetch_news_cnbc_rss()
             public_rss_articles = await NewsService.fetch_news_public_rss()
             compact_newsapi = await NewsService.fetch_news_newsapi_compact()
-            market_articles = await NewsService.fetch_news_newsapi(
-                market_keywords, category='market', per_keyword=2
-            )
-            commodity_articles = await NewsService.fetch_news_newsapi(
-                commodity_keywords, category='commodities', per_keyword=2
-            )
+            market_articles = []
+            commodity_articles = []
+            if not compact_newsapi and not NewsService._newsapi_in_cooldown():
+                market_articles = await NewsService.fetch_news_newsapi(
+                    market_keywords, category='market', per_keyword=2
+                )
+                commodity_articles = await NewsService.fetch_news_newsapi(
+                    commodity_keywords, category='commodities', per_keyword=2
+                )
             av_articles = await NewsService.fetch_news_alphavantage()
 
             all_articles = (

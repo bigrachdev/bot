@@ -3,10 +3,12 @@ Main bot initialization and event loop
 """
 import asyncio
 import signal
+from datetime import datetime, timedelta, timezone
 from telegram.ext import Application
 from telegram.error import Conflict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+from apscheduler.triggers.interval import IntervalTrigger
 from utils.logger import setup_logging
 from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, KEEP_ALIVE
 from database.db import MarketBot
@@ -23,6 +25,16 @@ logger = setup_logging()
 # Global bot instance and stop event
 bot_instance = None
 stop_event: asyncio.Event = None
+
+
+def _scheduler_listener(event):
+    """Log APScheduler job outcomes for observability."""
+    if event.code == EVENT_JOB_EXECUTED:
+        logger.info(f"Scheduled job executed successfully: {event.job_id}")
+    elif event.code == EVENT_JOB_MISSED:
+        logger.warning(f"Scheduled job MISSED: {event.job_id}")
+    elif event.code == EVENT_JOB_ERROR:
+        logger.error(f"Scheduled job failed: {event.job_id}", exc_info=event.exception)
 
 async def startup_auto_broadcast(
     bot_instance,
@@ -41,6 +53,10 @@ async def startup_auto_broadcast(
                 await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
             except Exception as e:
                 logger.error(f"Startup news broadcast failed: {e}")
+            try:
+                await AdScheduler.broadcast_omnex_ad(bot_instance, chat_list=chat_list)
+            except Exception as e:
+                logger.error(f"Startup ad broadcast failed: {e}")
 
             return
 
@@ -81,30 +97,43 @@ async def setup_bot():
         logger.info("✅ Command handlers registered")
         
         # Setup scheduler for broadcasts
-        scheduler = AsyncIOScheduler(timezone="UTC")
+        scheduler = AsyncIOScheduler(
+            timezone="UTC",
+            job_defaults={
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 3600,  # Tolerate delayed wakeups/restarts.
+            },
+        )
+        scheduler.add_listener(
+            _scheduler_listener,
+            EVENT_JOB_EXECUTED | EVENT_JOB_MISSED | EVENT_JOB_ERROR,
+        )
 
-        # Schedule news broadcast every 15 minutes
+        now_utc = datetime.now(timezone.utc)
+
+        # Schedule news broadcast every 15 minutes.
         scheduler.add_job(
             NewsScheduler.broadcast_news,
-            CronTrigger(minute='*/15'),
+            IntervalTrigger(minutes=15, start_date=now_utc + timedelta(minutes=15)),
             args=[bot_instance],
             id='news_broadcast',
             name='Broadcast news every 15 minutes'
         )
 
-        # Schedule analysis broadcast at :30 every hour
+        # Schedule analysis broadcast every hour.
         scheduler.add_job(
             AnalysisScheduler.broadcast_analysis,
-            CronTrigger(minute=30),
+            IntervalTrigger(hours=1, start_date=now_utc + timedelta(hours=1)),
             args=[bot_instance],
             id='analysis_broadcast',
-            name='Broadcast analysis every 30 minutes'
+            name='Broadcast analysis every hour'
         )
 
-        # Schedule Omnex ad broadcast every 4 hours
+        # Schedule Omnex ad broadcast every 4 hours.
         scheduler.add_job(
             AdScheduler.broadcast_omnex_ad,
-            CronTrigger(hour='*/4', minute=15),
+            IntervalTrigger(hours=4, start_date=now_utc + timedelta(hours=4)),
             args=[bot_instance],
             id='omnex_ad_broadcast',
             name='Broadcast Omnex ad every 4 hours'
@@ -117,10 +146,12 @@ async def setup_bot():
         # Store scheduler in application context for cleanup
         application.bot_data['scheduler'] = scheduler
 
-        logger.info("✅ Schedulers configured")
-        logger.info("📰 News broadcast: Every 15 minutes")
-        logger.info("📈 Analysis broadcast: Every hour at :30")
-        logger.info("💼 Omnex ad broadcast: Every 4 hours at :15")
+        logger.info("Schedulers configured")
+        logger.info("News broadcast: Every 15 minutes")
+        logger.info("Analysis broadcast: Every hour")
+        logger.info("Omnex ad broadcast: Every 4 hours")
+        for job in scheduler.get_jobs():
+            logger.info(f"Scheduled job registered: id={job.id}, next_run={job.next_run_time}")
 
         return application
         
@@ -206,4 +237,5 @@ if __name__ == '__main__':
         logger.error(f"❌ Fatal error: {e}")
     finally:
         loop.close()
+
 
