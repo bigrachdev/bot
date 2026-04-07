@@ -23,6 +23,7 @@ if YOUR_ADMIN_ID == 0:
 # Database
 DB_NAME = 'market_bot.db'
 NEWS_CACHE_HOURS = 24  # Don't post same news for 24 hours
+MAX_NEWS_AGE_HOURS = int(os.getenv('MAX_NEWS_AGE_HOURS', '6'))
 
 # News API Keys
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')

@@ -52,6 +52,7 @@ if YOUR_ADMIN_ID == 0:
 
 DB_NAME = 'market_bot.db'
 NEWS_CACHE_HOURS = 24  # Don't post same news for 24 hours
+MAX_NEWS_AGE_HOURS = int(os.getenv('MAX_NEWS_AGE_HOURS', '6'))
 
 # News API Keys (add to .env file)
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
@@ -406,6 +407,7 @@ class MarketBot:
                 'sortBy': 'publishedAt',
                 'language': 'en',
                 'pageSize': 20,
+                'from': (datetime.now(pytz.UTC) - timedelta(hours=MAX_NEWS_AGE_HOURS)).strftime('%Y-%m-%dT%H:%M:%SZ'),
                 'apiKey': NEWSAPI_KEY
             }
             
@@ -494,6 +496,14 @@ class MarketBot:
         except Exception:
             return datetime.min.replace(tzinfo=pytz.UTC)
 
+    def _is_recent_news_item(self, item: dict) -> bool:
+        """True when article publish time is inside freshness window."""
+        published_dt = self._parse_publish_time(item.get('published', ''))
+        if published_dt == datetime.min.replace(tzinfo=pytz.UTC):
+            return False
+        cutoff = datetime.now(pytz.UTC) - timedelta(hours=MAX_NEWS_AGE_HOURS)
+        return published_dt >= cutoff
+
     async def fetch_news_cnbc(self) -> List[dict]:
         """Fetch live market news from CNBC RSS."""
         try:
@@ -565,11 +575,14 @@ class MarketBot:
             seen_urls.add(url)
             seen_titles.add(title)
 
-        # Sort by published date (newest first)
-        unique_news.sort(key=lambda x: self._parse_publish_time(x.get('published', '')), reverse=True)
+        # Keep only fresh articles and sort newest first.
+        fresh_news = [item for item in unique_news if self._is_recent_news_item(item)]
+        fresh_news.sort(key=lambda x: self._parse_publish_time(x.get('published', '')), reverse=True)
 
-        logger.info(f"Aggregated {len(unique_news)} total news items")
-        return unique_news
+        logger.info(
+            f"Aggregated {len(unique_news)} items; {len(fresh_news)} within last {MAX_NEWS_AGE_HOURS}h"
+        )
+        return fresh_news
 
     def select_news_for_broadcast(self, news_items: List[dict], limit: int = 8) -> List[dict]:
         """Select a professional mix: at least one item per source, then newest overall."""

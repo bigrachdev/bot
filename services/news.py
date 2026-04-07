@@ -3,14 +3,14 @@ News fetching and formatting service
 """
 import aiohttp
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import escape
 from urllib.parse import urlparse
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 from utils.logger import logger
-from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY
+from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY, MAX_NEWS_AGE_HOURS
 
 
 class NewsService:
@@ -49,6 +49,40 @@ class NewsService:
     )
 
     SUPPORTED_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
+
+    @staticmethod
+    def _parse_published_time(value: str) -> datetime:
+        """Parse provider publish timestamps into timezone-aware UTC datetimes."""
+        raw = (value or '').strip()
+        if not raw:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+        try:
+            parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+
+        try:
+            parsed = parsedate_to_datetime(raw)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    @staticmethod
+    def _is_recent_article(article: dict) -> bool:
+        """True when article has a publish time within the configured freshness window."""
+        published = article.get('publishedAt') or ''
+        published_dt = NewsService._parse_published_time(published)
+        if published_dt == datetime.min.replace(tzinfo=timezone.utc):
+            return False
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
+        return published_dt >= cutoff
 
     @staticmethod
     def _classify_category(title: str, description: str, fallback: str = 'market') -> str:
@@ -197,12 +231,16 @@ class NewsService:
         try:
             async with aiohttp.ClientSession() as session:
                 for keyword in keywords:
+                    from_time = (
+                        datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
+                    ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
                     url = (
                         "https://newsapi.org/v2/everything"
                         f"?q={quote(keyword)}"
                         "&language=en"
                         "&searchIn=title,description"
                         "&sortBy=publishedAt"
+                        f"&from={quote(from_time)}"
                         f"&pageSize={per_keyword}"
                     )
                     headers = {"X-Api-Key": NEWSAPI_KEY}
@@ -323,17 +361,18 @@ class NewsService:
                     seen_titles.add(title_hash)
                     seen_urls.add(url)
 
+            fresh_articles = [a for a in unique_articles if NewsService._is_recent_article(a)]
+
             def sort_key(article):
-                published = article.get('publishedAt', '')
-                return published or datetime.min.isoformat()
+                return NewsService._parse_published_time(article.get('publishedAt', ''))
 
             market_sorted = sorted(
-                [a for a in unique_articles if a.get('category') == 'market'],
+                [a for a in fresh_articles if a.get('category') == 'market'],
                 key=sort_key,
                 reverse=True,
             )[:4]
             commodity_sorted = sorted(
-                [a for a in unique_articles if a.get('category') == 'commodities'],
+                [a for a in fresh_articles if a.get('category') == 'commodities'],
                 key=sort_key,
                 reverse=True,
             )[:3]
