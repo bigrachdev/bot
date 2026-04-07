@@ -24,6 +24,40 @@ logger = setup_logging()
 bot_instance = None
 stop_event: asyncio.Event = None
 
+async def startup_auto_broadcast(
+    bot_instance,
+    max_wait_seconds: int = 600,
+    poll_interval_seconds: int = 20,
+):
+    """Wait for at least one target chat/channel, then auto-broadcast without admin commands."""
+    elapsed = 0
+    while elapsed <= max_wait_seconds:
+        chat_list = bot_instance.get_subscribed_chats()
+        if chat_list:
+            logger.info(
+                f"Detected {len(chat_list)} target chat(s)/channel(s). Running startup broadcasts."
+            )
+            try:
+                await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
+            except Exception as e:
+                logger.error(f"Startup news broadcast failed: {e}")
+
+            try:
+                await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=chat_list)
+            except Exception as e:
+                logger.error(f"Startup analysis broadcast failed: {e}")
+
+            return
+
+        logger.info("No targets detected yet. Waiting before auto-broadcast retry...")
+        await asyncio.sleep(poll_interval_seconds)
+        elapsed += poll_interval_seconds
+
+    logger.warning(
+        "Startup auto-broadcast timed out without detected targets. "
+        "Scheduler jobs remain active and will continue retrying."
+    )
+
 async def setup_bot():
     """Initialize bot, database, and handlers"""
     global bot_instance
@@ -130,16 +164,15 @@ async def main():
             error_callback=on_polling_error,
         )
 
-        # Trigger immediate warm-up news broadcast on startup so channels don't wait
-        # until the next :00 cron window.
-        warmup_task = asyncio.create_task(NewsScheduler.broadcast_news(bot_instance))
+        # Auto-start broadcasting as soon as targets are detected.
+        warmup_task = asyncio.create_task(startup_auto_broadcast(bot_instance))
         def _log_warmup_outcome(task: asyncio.Task):
             if task.cancelled():
-                logger.warning("Warm-up news task was cancelled")
+                logger.warning("Startup auto-broadcast task was cancelled")
                 return
             err = task.exception()
             if err:
-                logger.error(f"Warm-up news task failed: {err}")
+                logger.error(f"Startup auto-broadcast task failed: {err}")
         warmup_task.add_done_callback(_log_warmup_outcome)
 
         # Keep running until signalled to stop
