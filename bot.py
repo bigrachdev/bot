@@ -4,6 +4,7 @@ Main bot initialization and event loop
 import asyncio
 import signal
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.error import Conflict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from utils.logger import setup_logging
@@ -107,12 +108,23 @@ async def main():
 
     logger.info("🌐 Starting bot polling...")
     try:
+        def on_polling_error(exc: Exception):
+            """Stop this instance when Telegram reports concurrent polling."""
+            if isinstance(exc, Conflict):
+                logger.error(
+                    "Polling conflict detected (another getUpdates consumer is active). "
+                    "Stopping this instance."
+                )
+                if stop_event and not stop_event.is_set():
+                    stop_event.set()
+
         await application.initialize()
         await application.start()
         await application.updater.start_polling(
             poll_interval=1.0,
             allowed_updates=['message', 'callback_query'],
-            drop_pending_updates=True
+            drop_pending_updates=True,
+            error_callback=on_polling_error,
         )
 
         # Trigger immediate warm-up news broadcast on startup so channels don't wait

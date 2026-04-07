@@ -14,6 +14,9 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
+    # Avoid leaking bot token via verbose HTTP request logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
     return logging.getLogger(__name__)
 
 logger = setup_logging()
