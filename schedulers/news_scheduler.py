@@ -44,6 +44,19 @@ class NewsScheduler:
             sent_per_article = {news_id: 0 for news_id, _ in fresh_articles}
 
             for chat_id, _chat_type in chat_list:
+                intro = NewsService.format_broadcast_intro([article for _id, article in fresh_articles])
+                try:
+                    await bot_instance.bot.send_message(
+                        chat_id=chat_id,
+                        text=intro,
+                        parse_mode='HTML',
+                    )
+                    successful += 1
+                    await asyncio.sleep(0.4)
+                except Exception as e:
+                    logger.error(f"Failed to send briefing intro to chat {chat_id}: {e}")
+                    failed += 1
+
                 for news_id, article in fresh_articles:
                     caption = NewsService.format_article_caption(article)
                     image_url = (article.get('image_url') or '').strip()
@@ -107,9 +120,16 @@ class NewsScheduler:
             if not articles:
                 await bot_instance.bot.send_message(
                     chat_id=chat_id,
-                    text="No high-quality market news found right now. Please try again later.",
+                    text="No high-quality stock or commodities stories found right now. Please try again later.",
                 )
                 return
+
+            await bot_instance.bot.send_message(
+                chat_id=chat_id,
+                text=NewsService.format_broadcast_intro(articles),
+                parse_mode='HTML',
+            )
+            await asyncio.sleep(0.4)
 
             for article in articles:
                 caption = NewsService.format_article_caption(article)

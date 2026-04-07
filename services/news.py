@@ -49,6 +49,51 @@ class NewsService:
     )
 
     SUPPORTED_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
+    STOCK_TERMS = (
+        'stock',
+        'stocks',
+        'equity',
+        'equities',
+        'earnings',
+        'guidance',
+        'nasdaq',
+        'dow',
+        's&p',
+        'sp500',
+        'wall street',
+        'valuation',
+        'analyst',
+        'share',
+    )
+    COMMODITY_TERMS = (
+        'commodity',
+        'commodities',
+        'crude',
+        'oil',
+        'brent',
+        'wti',
+        'gold',
+        'silver',
+        'copper',
+        'natural gas',
+        'lme',
+        'opec',
+        'metals',
+        'futures',
+    )
+    IMPACT_TERMS = (
+        'rate',
+        'inflation',
+        'fed',
+        'ecb',
+        'central bank',
+        'tariff',
+        'sanctions',
+        'outlook',
+        'demand',
+        'supply',
+        'forecast',
+    )
 
     @staticmethod
     def _parse_published_time(value: str) -> datetime:
@@ -88,20 +133,55 @@ class NewsService:
     def _classify_category(title: str, description: str, fallback: str = 'market') -> str:
         """Classify article into market vs commodities."""
         text = f"{title} {description}".lower()
-        commodity_terms = (
-            'oil',
-            'gold',
-            'silver',
-            'copper',
-            'natural gas',
-            'commodity',
-            'opec',
-            'wti',
-            'brent',
-        )
-        if any(term in text for term in commodity_terms):
+        if any(term in text for term in NewsService.COMMODITY_TERMS):
             return 'commodities'
         return fallback
+
+    @staticmethod
+    def _is_stock_or_commodity_article(article: dict) -> bool:
+        """Keep only items clearly related to stocks or commodities."""
+        text = f"{article.get('title', '')} {article.get('description', '')}".lower()
+        stock_hit = any(term in text for term in NewsService.STOCK_TERMS)
+        commodity_hit = any(term in text for term in NewsService.COMMODITY_TERMS)
+        return stock_hit or commodity_hit
+
+    @staticmethod
+    def _topic_label(article: dict) -> str:
+        """Derive a concise topic label for channel presentation."""
+        text = f"{article.get('title', '')} {article.get('description', '')}".lower()
+        if any(term in text for term in ('oil', 'crude', 'brent', 'wti', 'opec')):
+            return 'Oil'
+        if any(term in text for term in ('gold', 'silver', 'copper', 'metals', 'lme')):
+            return 'Metals'
+        if any(term in text for term in ('natural gas', 'gas futures')):
+            return 'Natural Gas'
+        if any(term in text for term in ('earnings', 'guidance', 'analyst', 'valuation')):
+            return 'Earnings'
+        if any(term in text for term in ('federal reserve', 'fed', 'rate', 'inflation', 'ecb', 'central bank')):
+            return 'Macro'
+        return 'Market'
+
+    @staticmethod
+    def _article_score(article: dict) -> int:
+        """Score for professional relevance and freshness ordering."""
+        text = f"{article.get('title', '')} {article.get('description', '')}".lower()
+        score = 0
+        if article.get('category') == 'commodities':
+            score += 3
+        if any(term in text for term in NewsService.STOCK_TERMS):
+            score += 3
+        if any(term in text for term in NewsService.COMMODITY_TERMS):
+            score += 3
+        if any(term in text for term in NewsService.IMPACT_TERMS):
+            score += 2
+        if NewsService._is_trusted_source(
+            article.get('source', {}).get('name', ''),
+            article.get('url', ''),
+        ):
+            score += 2
+        if NewsService._is_recent_article(article):
+            score += 2
+        return score
 
     @staticmethod
     def _is_trusted_source(source_name: str, url: str) -> bool:
@@ -362,23 +442,41 @@ class NewsService:
                     seen_urls.add(url)
 
             fresh_articles = [a for a in unique_articles if NewsService._is_recent_article(a)]
+            focused_articles = [a for a in fresh_articles if NewsService._is_stock_or_commodity_article(a)]
+            if not focused_articles:
+                logger.warning("No stock/commodity-focused articles found after filtering")
+                return []
 
             def sort_key(article):
-                return NewsService._parse_published_time(article.get('publishedAt', ''))
+                published = NewsService._parse_published_time(article.get('publishedAt', ''))
+                return (
+                    NewsService._article_score(article),
+                    published,
+                )
 
             market_sorted = sorted(
-                [a for a in fresh_articles if a.get('category') == 'market'],
+                [a for a in focused_articles if a.get('category') == 'market'],
                 key=sort_key,
                 reverse=True,
-            )[:4]
+            )
             commodity_sorted = sorted(
-                [a for a in fresh_articles if a.get('category') == 'commodities'],
+                [a for a in focused_articles if a.get('category') == 'commodities'],
                 key=sort_key,
                 reverse=True,
-            )[:3]
+            )
 
-            curated = market_sorted + commodity_sorted
-            return curated[:7]
+            selected = market_sorted[:4] + commodity_sorted[:3]
+            if len(selected) < 6:
+                combined_ranked = sorted(focused_articles, key=sort_key, reverse=True)
+                seen_urls = {a.get('url', '') for a in selected}
+                for candidate in combined_ranked:
+                    url = candidate.get('url', '')
+                    if url and url not in seen_urls:
+                        selected.append(candidate)
+                        seen_urls.add(url)
+                    if len(selected) >= 7:
+                        break
+            return selected[:7]
 
         except Exception as e:
             logger.error(f"Failed to fetch all news: {e}")
@@ -414,13 +512,17 @@ class NewsService:
         description = escape(article.get('description', 'No summary available.'))[:500]
         url = (article.get('url', '') or '').replace("'", "%27")
         category = escape((article.get('category') or 'market').title())
+        topic = escape(NewsService._topic_label(article))
         published = escape((article.get('publishedAt') or '')[:19].replace('T', ' '))
+        score = NewsService._article_score(article)
 
         caption = (
-            f"<b>{category} News</b>\n"
+            f"<b>Market Desk | Stocks & Commodities</b>\n"
+            f"<b>{category} | {topic}</b>\n"
             f"<b>{title}</b>\n\n"
             f"{description}\n\n"
             f"Source: <b>{source}</b>\n"
+            f"Relevance Score: <b>{score}/14</b>\n"
         )
         if published:
             caption += f"Published: {published} UTC\n"
@@ -428,3 +530,15 @@ class NewsService:
 
         # Telegram caption hard limit safety.
         return caption[:1000]
+
+    @staticmethod
+    def format_broadcast_intro(articles: list) -> str:
+        """Short professional header sent before article batch."""
+        market_count = sum(1 for a in articles if a.get('category') == 'market')
+        commodity_count = sum(1 for a in articles if a.get('category') == 'commodities')
+        return (
+            "<b>Stocks & Commodities Briefing</b>\n"
+            f"Coverage: <b>{market_count}</b> stock-market stories, "
+            f"<b>{commodity_count}</b> commodities stories.\n"
+            "Selection focuses on earnings, macro drivers, and supply-demand shifts."
+        )

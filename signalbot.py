@@ -61,6 +61,8 @@ NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 ALPHAVANTAGE_KEY = os.getenv('ALPHAVANTAGE_KEY', '')
 FINNHUB_KEY = os.getenv('FINNHUB_KEY', '')
 CNBC_RSS_URL = os.getenv('CNBC_RSS_URL', 'https://www.cnbc.com/id/100003114/device/rss/rss.html')
+TARGET_CHANNELS_RAW = os.getenv('TARGET_CHANNELS', '')
+TARGET_CHANNELS = [ch.strip() for ch in TARGET_CHANNELS_RAW.split(',') if ch.strip()] if TARGET_CHANNELS_RAW else []
 
 # Hardcoded top lists
 TOP_STOCKS = [
@@ -277,17 +279,34 @@ class MarketBot:
             return False
 
     def get_subscribed_chats(self) -> List[Tuple[int, str]]:
-        """Get all subscribed chats"""
+        """Get subscribed chats from DB plus static channels from config."""
+        chats = []
+        seen_chat_ids = set()
+
         try:
             conn = sqlite3.connect(self.db_name, check_same_thread=False)
             c = conn.cursor()
             c.execute("SELECT chat_id, chat_type FROM subscriptions")
-            chats = c.fetchall()
+            for chat_id, chat_type in c.fetchall():
+                chats.append((chat_id, chat_type))
+                seen_chat_ids.add(chat_id)
             conn.close()
-            return chats
         except Exception as e:
             logger.error(f"Failed to get subscribed chats: {e}")
-            return []
+
+        for chat_id_str in TARGET_CHANNELS:
+            try:
+                chat_id = int(chat_id_str)
+                if chat_id not in seen_chat_ids:
+                    chats.append((chat_id, 'channel'))
+                    seen_chat_ids.add(chat_id)
+            except ValueError:
+                logger.warning(f"Invalid channel ID in TARGET_CHANNELS: {chat_id_str}")
+
+        if not chats:
+            logger.warning("No subscribed chats found. Use /start or set TARGET_CHANNELS in .env")
+
+        return chats
 
     def is_news_cached(self, news_id: str) -> bool:
         """Check if news has already been posted (avoid duplicates)"""
