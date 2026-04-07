@@ -50,13 +50,13 @@ async def setup_bot():
         # Setup scheduler for broadcasts
         scheduler = AsyncIOScheduler(timezone="UTC")
 
-        # Schedule news broadcast at :00 every hour
+        # Schedule news broadcast every 15 minutes
         scheduler.add_job(
             NewsScheduler.broadcast_news,
-            CronTrigger(minute=0),
+            CronTrigger(minute='*/15'),
             args=[bot_instance],
             id='news_broadcast',
-            name='Broadcast news hourly'
+            name='Broadcast news every 15 minutes'
         )
 
         # Schedule analysis broadcast at :30 every hour
@@ -85,7 +85,7 @@ async def setup_bot():
         application.bot_data['scheduler'] = scheduler
 
         logger.info("✅ Schedulers configured")
-        logger.info("📰 News broadcast: Every hour at :00")
+        logger.info("📰 News broadcast: Every 15 minutes")
         logger.info("📈 Analysis broadcast: Every hour at :30")
         logger.info("💼 Omnex ad broadcast: Every 4 hours at :15")
 
@@ -154,3 +154,4 @@ if __name__ == '__main__':
         logger.error(f"❌ Fatal error: {e}")
     finally:
         loop.close()
+

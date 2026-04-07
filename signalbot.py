@@ -550,11 +550,63 @@ class MarketBot:
         if ALPHAVANTAGE_KEY:
             all_news.extend(await self.fetch_news_alphavantage())
 
-        # Sort by published date (newest first)
-        all_news.sort(key=lambda x: self._parse_publish_time(x.get('published', '')), reverse=True)
+        # Deduplicate by URL/title to avoid repeated stories from mirrored feeds.
+        unique_news = []
+        seen_urls = set()
+        seen_titles = set()
+        for item in all_news:
+            url = (item.get('url') or '').strip().lower()
+            title = (item.get('title') or '').strip().lower()
+            if not url or not title:
+                continue
+            if url in seen_urls or title in seen_titles:
+                continue
+            unique_news.append(item)
+            seen_urls.add(url)
+            seen_titles.add(title)
 
-        logger.info(f"Aggregated {len(all_news)} total news items")
-        return all_news
+        # Sort by published date (newest first)
+        unique_news.sort(key=lambda x: self._parse_publish_time(x.get('published', '')), reverse=True)
+
+        logger.info(f"Aggregated {len(unique_news)} total news items")
+        return unique_news
+
+    def select_news_for_broadcast(self, news_items: List[dict], limit: int = 8) -> List[dict]:
+        """Select a professional mix: at least one item per source, then newest overall."""
+        if not news_items:
+            return []
+
+        source_buckets = {}
+        for item in news_items:
+            source = (item.get('source') or 'Unknown').strip()
+            source_buckets.setdefault(source, []).append(item)
+
+        selected = []
+        used_ids = set()
+
+        # First pass: include top headline from each available source.
+        for source in sorted(source_buckets.keys()):
+            top_item = sorted(
+                source_buckets[source],
+                key=lambda x: self._parse_publish_time(x.get('published', '')),
+                reverse=True
+            )[0]
+            if top_item['id'] not in used_ids:
+                selected.append(top_item)
+                used_ids.add(top_item['id'])
+            if len(selected) >= limit:
+                return selected
+
+        # Second pass: fill remaining slots by recency regardless of source.
+        for item in news_items:
+            if item['id'] in used_ids:
+                continue
+            selected.append(item)
+            used_ids.add(item['id'])
+            if len(selected) >= limit:
+                break
+
+        return selected
 
     def format_news_message(self, news_items: List[dict]) -> str:
         """Format news items for Telegram message"""
@@ -821,94 +873,133 @@ async def show_analysis(query: CallbackQuery, symbol: str, exchange: str, screen
     except Exception as e:
         await query.edit_message_text(f"⚠️ Failed to analyze: {str(e)}")
 
+def _truncate_text(value: str, limit: int) -> str:
+    """Trim text safely for Telegram messages."""
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _format_published(value: str) -> str:
+    """Render publish date in UTC when parseable."""
+    dt = bot_instance._parse_publish_time(value)
+    if dt == datetime.min.replace(tzinfo=pytz.UTC):
+        return "Unknown"
+    return dt.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_professional_news_item(news: dict) -> str:
+    """Create professional HTML-safe news card for Telegram."""
+    title = html.escape(_truncate_text(news.get("title", "No title"), 180))
+    source = html.escape(news.get("source", "Unknown"))
+    description = html.escape(_truncate_text(news.get("description", ""), 420))
+    url = (news.get("url", "") or "").replace("'", "%27")
+    published = html.escape(_format_published(news.get("published", "")))
+
+    lines = [
+        "<b>Market News Update</b>",
+        f"<b>{title}</b>",
+        f"Source: <b>{source}</b>",
+        f"Published: {published}",
+    ]
+    if description:
+        lines.extend(["", description])
+    lines.extend(["", f"<a href='{url}'>Read full article</a>"])
+    return "\n".join(lines)
+
+
+def _build_news_overview_message(news_items: List[dict], title: str) -> str:
+    """One-line briefing intro with source coverage."""
+    source_counts = {}
+    for item in news_items:
+        source = (item.get("source") or "Unknown").strip()
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    source_parts = [f"{html.escape(src)} ({count})" for src, count in sorted(source_counts.items())]
+    source_text = ", ".join(source_parts)
+    return (
+        f"<b>{html.escape(title)}</b>\n"
+        f"Stories in this cycle: <b>{len(news_items)}</b>\n"
+        f"Sources: {source_text}"
+    )
+
+
 async def send_news_to_chat(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Fetch and send news to a specific chat"""
+    """Fetch and send a professional multi-source news briefing to one chat."""
     try:
         news_items = await bot_instance.fetch_all_news()
-        
-        if not news_items:
+        selected_items = bot_instance.select_news_for_broadcast(news_items, limit=8)
+
+        if not selected_items:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="📰 No market news available at this time.",
-                parse_mode='Markdown'
+                text="No market news is available right now. Please try again shortly.",
             )
             return
-        
-        # Send top news items
-        for news in news_items[:3]:  # Send top 3 news
-            message = f"📰 *{news['title']}*\n\n"
-            message += f"Source: {news['source']}\n"
-            
-            if news['description']:
-                desc = news['description'][:200]
-                if len(news['description']) > 200:
-                    desc += "..."
-                message += f"_{desc}_\n\n"
-            
-            message += f"[Read full article]({news['url']})"
-            
+
+        overview = _build_news_overview_message(selected_items, title="Market Intelligence Briefing")
+        await context.bot.send_message(chat_id=chat_id, text=overview, parse_mode='HTML')
+
+        for news in selected_items:
             try:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=message,
-                    parse_mode='Markdown'
+                    text=_format_professional_news_item(news),
+                    parse_mode='HTML',
+                    disable_web_page_preview=False,
                 )
-                
-                # Cache the news
                 bot_instance.cache_news(news['id'], news['title'], news['source'], news['url'])
-                
-                await asyncio.sleep(1)  # Rate limiting
+                await asyncio.sleep(0.7)
             except Exception as e:
-                logger.error(f"Failed to send news to chat {chat_id}: {e}")
-    
+                logger.error(f"Failed to send news item '{news.get('title', '')[:60]}' to chat {chat_id}: {e}")
+
     except Exception as e:
         logger.error(f"Error sending news: {e}")
 
+
 async def broadcast_news(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to broadcast news to all subscribed chats (hourly)"""
-    logger.info("Starting hourly news broadcast")
-    
+    """Scheduled job to broadcast professional news updates to all subscribed chats."""
+    logger.info("Starting scheduled news broadcast")
+
     try:
         news_items = await bot_instance.fetch_all_news()
-        
-        if not news_items:
+        selected_items = bot_instance.select_news_for_broadcast(news_items, limit=8)
+
+        if not selected_items:
             logger.warning("No news items to broadcast")
             return
-        
+
         subscribed_chats = bot_instance.get_subscribed_chats()
-        logger.info(f"Broadcasting to {len(subscribed_chats)} subscribed chats")
-        
+        logger.info(f"Broadcasting {len(selected_items)} stories to {len(subscribed_chats)} subscribed chats")
+
         for chat_id, chat_type in subscribed_chats:
             try:
-                # Send top news
-                for news in news_items[:2]:  # Send top 2 news per broadcast
-                    message = f"📰 *{news['title']}*\n\n"
-                    message += f"Source: {news['source']}\n"
-                    
-                    if news['description']:
-                        desc = news['description'][:150]
-                        if len(news['description']) > 150:
-                            desc += "..."
-                        message += f"_{desc}_\n\n"
-                    
-                    message += f"[Read more]({news['url']})"
-                    
+                overview = _build_news_overview_message(
+                    selected_items,
+                    title="Scheduled Market Intelligence Briefing"
+                )
+                await context.bot.send_message(chat_id=chat_id, text=overview, parse_mode='HTML')
+            except Exception as e:
+                logger.error(f"Failed to send overview to chat {chat_id}: {e}")
+                continue
+
+            for news in selected_items:
+                try:
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=message,
-                        parse_mode='Markdown'
+                        text=_format_professional_news_item(news),
+                        parse_mode='HTML',
+                        disable_web_page_preview=False,
                     )
-                    
-                    # Cache the news
                     bot_instance.cache_news(news['id'], news['title'], news['source'], news['url'])
-                    
-                    await asyncio.sleep(0.5)  # Rate limiting
-            
-            except Exception as e:
-                logger.error(f"Failed to send news to chat {chat_id}: {e}")
-    
+                    await asyncio.sleep(0.7)
+                except Exception as e:
+                    logger.error(f"Failed to send news item '{news.get('title', '')[:60]}' to chat {chat_id}: {e}")
+
     except Exception as e:
         logger.error(f"Broadcast news failed: {e}")
+
 
 async def broadcast_analysis(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled job to broadcast strong trading signals to all subscribed chats (hourly)"""
@@ -1274,14 +1365,14 @@ def main():
         application.add_handler(CallbackQueryHandler(market_callback))
         
         # Welcome handler
-        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler))        # Setup scheduler for hourly broadcasts using PTB job queue
+        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler))
+        # Setup scheduler for recurring broadcasts using PTB job queue
         job_queue = application.job_queue
         if job_queue:
             now = datetime.now(pytz.UTC)
 
-            next_news = now.replace(minute=0, second=0, microsecond=0)
-            if next_news <= now:
-                next_news += timedelta(hours=1)
+            # Run first news push shortly after startup, then every 15 minutes.
+            next_news = now + timedelta(seconds=30)
 
             next_analysis = now.replace(minute=30, second=0, microsecond=0)
             if next_analysis <= now:
@@ -1289,9 +1380,9 @@ def main():
 
             job_queue.run_repeating(
                 broadcast_news,
-                interval=3600,
+                interval=900,
                 first=next_news,
-                name='hourly_news'
+                name='news_15min'
             )
             job_queue.run_repeating(
                 broadcast_analysis,
@@ -1299,11 +1390,11 @@ def main():
                 first=next_analysis,
                 name='hourly_analysis'
             )
-            logger.info("Hourly news/analysis jobs scheduled via PTB job queue")
+            logger.info("News (15 min) and analysis (hourly) jobs scheduled via PTB job queue")
         else:
             logger.warning("Job queue unavailable - hourly broadcasts are disabled")
         print("\n✅ Market Data Bot Live!")
-        print("📰 News broadcasts every hour at :00")
+        print("📰 News broadcasts every 15 minutes")
         print("📈 Analysis broadcasts every hour at :30")
         print("\nUser Commands:")
         print("  /start - View markets")
@@ -1334,5 +1425,9 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+
 
 
