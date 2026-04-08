@@ -20,39 +20,38 @@ class AnalysisScheduler:
             if chat_list is None:
                 chat_list = bot_instance.get_subscribed_chats()
 
+            if not chat_list:
+                logger.info("No subscribed chats for analysis broadcast")
+                return
+
+            stock_prices = await AnalysisService.fetch_top_stock_prices()
+            snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
+
             signals = await AnalysisService.fetch_top_stocks_analysis()
+            message = PostingService.format_analysis_bulletin(signals, "Stocks")
+
             if not signals:
                 status = AnalysisService.get_last_status()
                 logger.info("No stock performance data detected")
                 if status == "rate_limited" and chat_list:
-                    notice = (
+                    message = (
                         "<b>Stocks Signal Bulletin</b>\n"
                         "Data providers are temporarily rate-limiting requests. "
                         "The bot will retry automatically on the next cycle."
                     )
-                    for chat_id, _chat_type in chat_list:
-                        try:
-                            await bot_instance.bot.send_message(
-                                chat_id=chat_id,
-                                text=notice,
-                                parse_mode='HTML',
-                            )
-                            await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
-                        except Exception as e:
-                            logger.error(f"Failed to send analysis status notice to chat {chat_id}: {e}")
-                return
-
-            message = PostingService.format_analysis_bulletin(signals, "Stocks")
-
-            if not chat_list:
-                logger.info("No subscribed chats for analysis broadcast")
-                return
 
             successful = 0
             failed = 0
 
             for chat_id, _chat_type in chat_list:
                 try:
+                    await bot_instance.bot.send_message(
+                        chat_id=chat_id,
+                        text=snapshot_message,
+                        parse_mode='HTML',
+                    )
+                    await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
+
                     await bot_instance.bot.send_message(
                         chat_id=chat_id,
                         text=message,
@@ -77,8 +76,16 @@ class AnalysisScheduler:
             logger.info(f"Fetching {market} analysis for chat {chat_id}...")
 
             if market.lower() == 'stocks':
+                stock_prices = await AnalysisService.fetch_top_stock_prices()
+                snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
                 signals = await AnalysisService.fetch_top_stocks_analysis()
                 message = PostingService.format_analysis_bulletin(signals, "Stocks")
+                await bot_instance.bot.send_message(
+                    chat_id=chat_id,
+                    text=snapshot_message,
+                    parse_mode='HTML',
+                )
+                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
             else:
                 message = "Unknown market type. Use 'stocks'."
 

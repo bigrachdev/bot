@@ -100,6 +100,18 @@ TOP_STOCKS = [
     {'name': 'Pfizer', 'symbol': 'PFE', 'exchange': 'NYSE', 'screener': 'america'},
     {'name': 'S&P Global', 'symbol': 'SPGI', 'exchange': 'NYSE', 'screener': 'america'},
     {'name': 'RTX', 'symbol': 'RTX', 'exchange': 'NYSE', 'screener': 'america'},
+    {'name': 'Advanced Micro Devices', 'symbol': 'AMD', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Netflix', 'symbol': 'NFLX', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Uber Technologies', 'symbol': 'UBER', 'exchange': 'NYSE', 'screener': 'america'},
+    {'name': 'PayPal', 'symbol': 'PYPL', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Shopify', 'symbol': 'SHOP', 'exchange': 'NYSE', 'screener': 'america'},
+    {'name': 'Coinbase', 'symbol': 'COIN', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Palantir', 'symbol': 'PLTR', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Snowflake', 'symbol': 'SNOW', 'exchange': 'NYSE', 'screener': 'america'},
+    {'name': 'Micron Technology', 'symbol': 'MU', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Intel', 'symbol': 'INTC', 'exchange': 'NASDAQ', 'screener': 'america'},
+    {'name': 'Nike', 'symbol': 'NKE', 'exchange': 'NYSE', 'screener': 'america'},
+    {'name': 'Exxon Mobil', 'symbol': 'XOM', 'exchange': 'NYSE', 'screener': 'america'},
 ]
 
 # Forex data - top forex pairs

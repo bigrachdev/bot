@@ -50,6 +50,30 @@ class PostingService:
         )
 
     @staticmethod
+    def format_market_snapshot_message(stock_prices: list) -> str:
+        """Standalone market snapshot message (separate from news cards)."""
+        generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines = [
+            "<b>Market Snapshot | Top Performing Stocks</b>",
+            f"Published: <b>{generated_at}</b>",
+            "",
+        ]
+
+        if not stock_prices:
+            lines.append("Live stock quotes are temporarily unavailable for this cycle.")
+        else:
+            for stock in stock_prices[:15]:
+                name = escape(stock.get("name", "Unknown"))
+                symbol = escape(stock.get("symbol", "N/A"))
+                price = escape(stock.get("price", "N/A"))
+                change = escape(str(stock.get("change", "N/A")))
+                lines.append(f"- <b>{symbol}</b> ({name}): {price} | {change}")
+
+        lines.append("")
+        lines.append(f"<i>{PostingService.DISCLAIMER}</i>")
+        return "\n".join(lines).strip()
+
+    @staticmethod
     def format_news_article_card(article: dict, rank: int, total: int) -> str:
         """Consistent per-article card format."""
         title = escape(article.get("title", "No title"))[:220]
