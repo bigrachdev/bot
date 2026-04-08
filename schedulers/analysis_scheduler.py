@@ -2,6 +2,8 @@
 Analysis broadcasting scheduler
 """
 import asyncio
+from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES
+from services.posting import PostingService
 from utils.logger import logger
 from services.analysis import AnalysisService
 
@@ -24,7 +26,7 @@ class AnalysisScheduler:
                 logger.info("No stock performance data detected")
                 if status == "rate_limited" and chat_list:
                     notice = (
-                        "<b>Stocks Analysis Update</b>\n"
+                        "<b>Stocks Signal Bulletin</b>\n"
                         "Data providers are temporarily rate-limiting requests. "
                         "The bot will retry automatically on the next cycle."
                     )
@@ -35,12 +37,12 @@ class AnalysisScheduler:
                                 text=notice,
                                 parse_mode='HTML',
                             )
-                            await asyncio.sleep(0.4)
+                            await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
                         except Exception as e:
                             logger.error(f"Failed to send analysis status notice to chat {chat_id}: {e}")
                 return
 
-            message = AnalysisService.format_analysis_message(signals, 'Stocks')
+            message = PostingService.format_analysis_bulletin(signals, "Stocks")
 
             if not chat_list:
                 logger.info("No subscribed chats for analysis broadcast")
@@ -61,7 +63,7 @@ class AnalysisScheduler:
                     logger.error(f"Failed to send analysis to chat {chat_id}: {e}")
                     failed += 1
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
 
             logger.info(f"Analysis broadcast complete: {successful} successful, {failed} failed")
 
@@ -76,7 +78,7 @@ class AnalysisScheduler:
 
             if market.lower() == 'stocks':
                 signals = await AnalysisService.fetch_top_stocks_analysis()
-                message = AnalysisService.format_analysis_message(signals, 'Stocks')
+                message = PostingService.format_analysis_bulletin(signals, "Stocks")
             else:
                 message = "Unknown market type. Use 'stocks'."
 

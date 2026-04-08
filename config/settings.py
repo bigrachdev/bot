@@ -38,6 +38,16 @@ TARGET_CHANNELS = [ch.strip() for ch in TARGET_CHANNELS_RAW.split(',') if ch.str
 KEEP_ALIVE = os.getenv('KEEP_ALIVE', 'True').lower() in ('true', '1', 'yes')
 KEEP_ALIVE_INTERVAL = int(os.getenv('KEEP_ALIVE_INTERVAL', '300'))
 
+# Posting governance (professional pacing and volume controls)
+POST_MAX_NEWS_PER_CYCLE = max(1, int(os.getenv('POST_MAX_NEWS_PER_CYCLE', '4')))
+POST_MIN_SECONDS_BETWEEN_MESSAGES = max(0.2, float(os.getenv('POST_MIN_SECONDS_BETWEEN_MESSAGES', '0.8')))
+SEND_BRIEFING_INTRO = os.getenv('SEND_BRIEFING_INTRO', 'True').lower() in ('true', '1', 'yes')
+
+# Scheduler cadence (minutes)
+NEWS_INTERVAL_MINUTES = max(5, int(os.getenv('NEWS_INTERVAL_MINUTES', '25')))
+ANALYSIS_INTERVAL_MINUTES = max(15, int(os.getenv('ANALYSIS_INTERVAL_MINUTES', '60')))
+AD_INTERVAL_MINUTES = max(30, int(os.getenv('AD_INTERVAL_MINUTES', '240')))
+
 # Stock data - top 50 stocks
 TOP_STOCKS = [
     {'name': 'NVIDIA', 'symbol': 'NVDA', 'exchange': 'NASDAQ', 'screener': 'america'},

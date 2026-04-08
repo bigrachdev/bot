@@ -7,7 +7,14 @@ from telegram.ext import Application
 from telegram.error import Conflict
 
 from utils.logger import setup_logging
-from config.settings import BOT_TOKEN, YOUR_ADMIN_ID, KEEP_ALIVE
+from config.settings import (
+    AD_INTERVAL_MINUTES,
+    ANALYSIS_INTERVAL_MINUTES,
+    BOT_TOKEN,
+    KEEP_ALIVE,
+    NEWS_INTERVAL_MINUTES,
+    YOUR_ADMIN_ID,
+)
 from database.db import MarketBot
 from handlers.user_commands import setup_user_handlers
 from handlers.admin_commands import setup_admin_handlers
@@ -22,9 +29,9 @@ logger = setup_logging()
 bot_instance = None
 stop_event: asyncio.Event = None
 
-NEWS_INTERVAL_SECONDS = 25 * 60  # 25 minutes - one headline from each source
-ANALYSIS_INTERVAL_SECONDS = 60 * 60
-AD_INTERVAL_SECONDS = 4 * 60 * 60
+NEWS_INTERVAL_SECONDS = NEWS_INTERVAL_MINUTES * 60
+ANALYSIS_INTERVAL_SECONDS = ANALYSIS_INTERVAL_MINUTES * 60
+AD_INTERVAL_SECONDS = AD_INTERVAL_MINUTES * 60
 
 
 async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
@@ -117,9 +124,9 @@ async def setup_bot():
         logger.info("Command handlers registered")
 
         logger.info("Periodic broadcasters configured")
-        logger.info("News broadcast interval: 25 minutes (one headline per source)")
-        logger.info("Analysis broadcast interval: 1 hour")
-        logger.info("Omnex ad broadcast interval: 4 hours")
+        logger.info("News broadcast interval: %d minutes", NEWS_INTERVAL_MINUTES)
+        logger.info("Analysis broadcast interval: %d minutes", ANALYSIS_INTERVAL_MINUTES)
+        logger.info("Omnex ad broadcast interval: %d minutes", AD_INTERVAL_MINUTES)
 
         return application
 

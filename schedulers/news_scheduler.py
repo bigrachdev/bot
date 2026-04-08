@@ -2,16 +2,42 @@
 News broadcasting scheduler
 """
 import asyncio
-import random
-from utils.logger import logger
+
+from config.settings import (
+    POST_MAX_NEWS_PER_CYCLE,
+    POST_MIN_SECONDS_BETWEEN_MESSAGES,
+    SEND_BRIEFING_INTRO,
+)
 from services.news import NewsService
+from services.posting import PostingService
+from utils.logger import logger
 
 
 class NewsScheduler:
-    """Handle scheduled news broadcasting"""
+    """Handle scheduled news broadcasting."""
 
     @staticmethod
-    async def _send_article_with_fallback(bot_instance, chat_id: int, caption: str, image_url: str, video_url: str):
+    def _select_cycle_articles(bot_instance, articles: list) -> list:
+        """Pick fresh uncached articles and cap output size for consistent pacing."""
+        fresh_articles = []
+        for article in articles:
+            news_id = NewsService.make_news_id(article)
+            if not bot_instance.is_news_cached(news_id):
+                fresh_articles.append(article)
+
+        if not fresh_articles:
+            return []
+
+        return fresh_articles[:POST_MAX_NEWS_PER_CYCLE]
+
+    @staticmethod
+    async def _send_article_with_fallback(
+        bot_instance,
+        chat_id: int,
+        caption: str,
+        image_url: str,
+        video_url: str,
+    ):
         """Try rich media first, then fall back to plain text to avoid dropping posts."""
         if video_url and NewsService._is_supported_video_url(video_url):
             try:
@@ -19,7 +45,7 @@ class NewsScheduler:
                     chat_id=chat_id,
                     video=video_url,
                     caption=caption,
-                    parse_mode='HTML',
+                    parse_mode="HTML",
                     supports_streaming=True,
                 )
                 return
@@ -32,7 +58,7 @@ class NewsScheduler:
                     chat_id=chat_id,
                     photo=image_url,
                     caption=caption,
-                    parse_mode='HTML',
+                    parse_mode="HTML",
                 )
                 return
             except Exception as e:
@@ -41,23 +67,21 @@ class NewsScheduler:
         await bot_instance.bot.send_message(
             chat_id=chat_id,
             text=caption,
-            parse_mode='HTML',
-            disable_web_page_preview=False,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
     @staticmethod
     async def broadcast_news(bot_instance, chat_list: list = None):
-        """Broadcast one major headline from each source with stock prices every 20-30 mins."""
+        """Broadcast one professional briefing cycle to subscribed chats."""
         try:
-            logger.info("Starting news broadcast (one headline per source)...")
+            logger.info("Starting professional news briefing cycle...")
 
-            # Fetch all news
             articles = await NewsService.fetch_all_news()
             if not articles:
                 logger.warning("No articles fetched for broadcast")
                 return
 
-            # Get subscribed chats if not provided
             if chat_list is None:
                 chat_list = bot_instance.get_subscribed_chats()
 
@@ -65,39 +89,38 @@ class NewsScheduler:
                 logger.info("No subscribed chats for news broadcast")
                 return
 
-            # Group articles by source and pick the top one from each
-            source_articles = {}
-            for article in articles:
-                source_name = (article.get('source', {}).get('name', 'Unknown') or 'Unknown').lower()
-                if source_name not in source_articles:
-                    source_articles[source_name] = article
-
-            # Get unique sources
-            unique_sources = list(source_articles.keys())
-            logger.info(f"Found {len(unique_sources)} unique news sources")
-
-            # Filter out already cached articles
-            fresh_sources = {}
-            for source_name, article in source_articles.items():
-                news_id = NewsService.make_news_id(article)
-                if not bot_instance.is_news_cached(news_id):
-                    fresh_sources[source_name] = article
-
-            if not fresh_sources:
-                logger.info("All source headlines are already cached; skipping broadcast")
+            selected_articles = NewsScheduler._select_cycle_articles(bot_instance, articles)
+            if not selected_articles:
+                logger.info("No fresh news selected for this cycle after cache checks")
                 return
 
-            # Send one headline from each fresh source
+            intro = PostingService.format_news_briefing_intro(selected_articles)
+
             successful = 0
             failed = 0
 
             for chat_id, _chat_type in chat_list:
-                for source_name, article in fresh_sources.items():
-                    # Format message with article + stock prices
-                    caption = await NewsScheduler.format_news_with_stocks(article)
-                    image_url = (article.get('image_url') or '').strip()
-                    video_url = (article.get('video_url') or '').strip()
-                    
+                if SEND_BRIEFING_INTRO:
+                    try:
+                        await bot_instance.bot.send_message(
+                            chat_id=chat_id,
+                            text=intro,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                        await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
+                    except Exception as e:
+                        logger.error(f"Failed to send briefing intro to chat {chat_id}: {e}")
+
+                for rank, article in enumerate(selected_articles, start=1):
+                    caption = PostingService.format_news_article_card(
+                        article=article,
+                        rank=rank,
+                        total=len(selected_articles),
+                    )
+                    image_url = (article.get("image_url") or "").strip()
+                    video_url = (article.get("video_url") or "").strip()
+
                     try:
                         await NewsScheduler._send_article_with_fallback(
                             bot_instance=bot_instance,
@@ -107,64 +130,39 @@ class NewsScheduler:
                             video_url=video_url,
                         )
                         successful += 1
-                        
-                        # Cache this article
+
                         news_id = NewsService.make_news_id(article)
                         bot_instance.cache_news(
                             news_id,
-                            article.get('title', ''),
-                            article.get('source', {}).get('name', 'Unknown'),
-                            article.get('url', ''),
+                            article.get("title", ""),
+                            article.get("source", {}).get("name", "Unknown"),
+                            article.get("url", ""),
                         )
                     except Exception as e:
-                        logger.error(
-                            f"Failed to send article from {source_name} to chat {chat_id}: {e}"
-                        )
+                        source_name = article.get("source", {}).get("name", "Unknown")
+                        logger.error(f"Failed to send article from {source_name} to chat {chat_id}: {e}")
                         failed += 1
 
-                    # Brief delay to avoid rate limiting
-                    await asyncio.sleep(0.8)
+                    await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
 
-            logger.info(f"News broadcast complete: {successful} successful, {failed} failed")
+            logger.info(
+                "News broadcast complete: %d successful, %d failed, %d stories/cycle",
+                successful,
+                failed,
+                len(selected_articles),
+            )
 
         except Exception as e:
             logger.error(f"News broadcast failed: {e}")
 
     @staticmethod
     async def format_news_with_stocks(article: dict) -> str:
-        """Format a news article with current stock prices."""
-        from services.analysis import AnalysisService
-        
-        # Format the news article
-        news_caption = NewsService.format_article_caption(article)
-        
-        # Add a separator and stock market snapshot
-        stock_header = (
-            "\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📊 <b>Market Snapshot</b>\n"
-        )
-        
-        # Fetch top stock prices
-        try:
-            stock_prices = await AnalysisService.fetch_top_stock_prices()
-            
-            if stock_prices:
-                stock_prices_text = ""
-                for stock in stock_prices:
-                    stock_prices_text += f"• {stock['name']} ({stock['symbol']}): {stock['price']}\n"
-                stock_header += stock_prices_text
-            else:
-                stock_header += "Market data temporarily unavailable\n"
-        except Exception as e:
-            logger.warning(f"Failed to fetch stock prices for news post: {e}")
-            stock_header += "Market data loading...\n"
-        
-        return news_caption + stock_header
+        """Backward-compatible wrapper retained for older call paths."""
+        return PostingService.format_news_article_card(article=article, rank=1, total=1)
 
     @staticmethod
     async def send_news_to_chat(bot_instance, chat_id: int):
-        """Send current curated news to a specific chat as separate article posts."""
+        """Send current curated briefing to a specific chat."""
         try:
             logger.info(f"Fetching news for chat {chat_id}...")
 
@@ -176,10 +174,34 @@ class NewsScheduler:
                 )
                 return
 
-            for article in articles:
-                caption = await NewsScheduler.format_news_with_stocks(article)
-                image_url = (article.get('image_url') or '').strip()
-                video_url = (article.get('video_url') or '').strip()
+            selected_articles = NewsScheduler._select_cycle_articles(bot_instance, articles)
+            if not selected_articles:
+                await bot_instance.bot.send_message(
+                    chat_id=chat_id,
+                    text="No fresh stories in this cycle. The next update will include new market headlines.",
+                )
+                return
+
+            intro = PostingService.format_news_briefing_intro(selected_articles)
+
+            if SEND_BRIEFING_INTRO:
+                await bot_instance.bot.send_message(
+                    chat_id=chat_id,
+                    text=intro,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
+
+            for rank, article in enumerate(selected_articles, start=1):
+                caption = PostingService.format_news_article_card(
+                    article=article,
+                    rank=rank,
+                    total=len(selected_articles),
+                )
+                image_url = (article.get("image_url") or "").strip()
+                video_url = (article.get("video_url") or "").strip()
+
                 await NewsScheduler._send_article_with_fallback(
                     bot_instance=bot_instance,
                     chat_id=chat_id,
@@ -187,7 +209,15 @@ class NewsScheduler:
                     image_url=image_url,
                     video_url=video_url,
                 )
-                await asyncio.sleep(0.6)
+
+                news_id = NewsService.make_news_id(article)
+                bot_instance.cache_news(
+                    news_id,
+                    article.get("title", ""),
+                    article.get("source", {}).get("name", "Unknown"),
+                    article.get("url", ""),
+                )
+                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
 
             logger.info(f"News sent to chat {chat_id}")
 
