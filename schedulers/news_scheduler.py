@@ -68,7 +68,7 @@ class NewsScheduler:
             chat_id=chat_id,
             text=caption,
             parse_mode="HTML",
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
 
     @staticmethod

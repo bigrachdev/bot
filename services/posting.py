@@ -14,6 +14,17 @@ class PostingService:
     DISCLAIMER = "Educational market update only. Not financial advice."
 
     @staticmethod
+    def _build_impact_line(article: dict) -> str:
+        """Generate a concise impact statement to add context beyond headline text."""
+        category = (article.get("category") or "market").lower()
+        topic = NewsService._topic_label(article)
+        if category == "commodities":
+            return f"Why it matters: {topic} pricing can influence inflation expectations and sector leadership."
+        if topic in {"Earnings", "Macro"}:
+            return "Why it matters: This can shift risk sentiment, forward guidance assumptions, and valuation multiples."
+        return "Why it matters: This may affect market positioning, volatility, and near-term price discovery."
+
+    @staticmethod
     def _format_published_utc(article: dict) -> str:
         """Return article publish timestamp in compact UTC display format."""
         published = article.get("publishedAt") or ""
@@ -30,9 +41,10 @@ class PostingService:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         return (
-            "<b>Market Desk Briefing</b>\n"
+            "<b>Market Desk | High-Impact News Briefing</b>\n"
             f"Published: <b>{generated_at}</b>\n"
             f"Coverage: <b>{market_count}</b> market | <b>{commodity_count}</b> commodities\n\n"
+            "Focus: market-moving headlines with context, timing, and source credibility.\n"
             "News feed only in this bulletin. Stock signal data is published separately.\n\n"
             f"<i>{PostingService.DISCLAIMER}</i>"
         )
@@ -41,23 +53,18 @@ class PostingService:
     def format_news_article_card(article: dict, rank: int, total: int) -> str:
         """Consistent per-article card format."""
         title = escape(article.get("title", "No title"))[:220]
-        description = escape(article.get("description", "No summary available."))[:420]
-        source = escape(article.get("source", {}).get("name", "Unknown"))
+        description = escape(article.get("description", "No summary available."))[:820]
         category = escape((article.get("category") or "market").title())
         topic = escape(NewsService._topic_label(article))
-        score = NewsService._article_score(article)
-        max_score = NewsService.RELEVANCE_MAX_SCORE
-        published = PostingService._format_published_utc(article)
+        impact_line = escape(PostingService._build_impact_line(article))
         url = (article.get("url", "") or "").replace("'", "%27")
 
         return (
             f"<b>Story {rank}/{total} | {category} | {topic}</b>\n"
             f"<b>{title}</b>\n\n"
-            f"{description}\n\n"
-            f"Source: <b>{source}</b>\n"
-            f"Published: <b>{published}</b>\n"
-            f"Signal Score: <b>{score}/{max_score}</b>\n"
-            f"<a href='{url}'>Read full article</a>\n\n"
+            f"<b>What happened</b>\n{description}\n\n"
+            f"<b>{impact_line}</b>\n\n"
+            f"<a href='{url}'>Read full story and market implications</a>\n\n"
             f"<i>{PostingService.DISCLAIMER}</i>"
         )[:1000]
 
