@@ -1,6 +1,7 @@
 """
 News fetching and formatting service
 """
+import asyncio
 import aiohttp
 import hashlib
 import re
@@ -127,6 +128,34 @@ class NewsService:
         'into', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'to', 'up', 'with',
         'after', 'amid', 'over', 'under', 'near', 'new', 'says', 'say'
     }
+
+    # Fallback sources - crypto, war, general news (always available)
+    CRYPTO_RSS_FEEDS = [
+        ("https://cointelegraph.com/rss", "CoinTelegraph"),
+        ("https://cryptonews.com/newsfeed", "CryptoNews"),
+        ("https://bitcoinmagazine.com/.rss/full", "Bitcoin Magazine"),
+        ("https://www.coindesk.com/arc/outboundfeeds/rss/", "CoinDesk"),
+    ]
+
+    WAR_CONFLICT_RSS_FEEDS = [
+        ("https://feeds.reuters.com/reuters/worldNews", "Reuters World"),
+        ("https://apnews.com/rss/world-news", "AP World"),
+        ("https://www.bbc.com/news/world/rss.xml", "BBC World"),
+        ("https://feeds.skynews.com/feeds/rss/world.xml", "Sky News World"),
+        ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
+        ("https://feeds.reuters.com/reuters/worldMostRead", "Reuters Global"),
+    ]
+
+    GENERAL_NEWS_RSS_FEEDS = [
+        ("https://feeds.reuters.com/reuters/topNews", "Reuters Top"),
+        ("https://apnews.com/rss/apf-topnews", "AP Top"),
+        ("https://feeds.bbci.co.uk/news/rss.xml", "BBC News"),
+        ("https://www.theguardian.com/world/rss", "Guardian World"),
+        ("https://feeds.nbcnews.com/nbcnews/public/news", "NBC News"),
+        ("https://www.newsweek.com/rss", "Newsweek"),
+    ]
+
+    FALLBACK_WINDOW_HOURS = 12  # Fallback sources can use articles up to 12h old
 
     @staticmethod
     def _parse_published_time(value: str) -> datetime:
@@ -484,6 +513,103 @@ class NewsService:
         return articles
 
     @staticmethod
+    async def _fetch_rss_feed_articles(feed_url: str, source_name: str, category: str) -> list:
+        """Fetch articles from a single RSS feed, tolerant of errors."""
+        articles = []
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    feed_url,
+                    headers=NewsService.REQUEST_HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=12),
+                ) as resp:
+                    if resp.status != 200:
+                        return articles
+
+                    raw_xml = await resp.text()
+                    root = ET.fromstring(raw_xml)
+
+                    for item in root.findall(".//item"):
+                        title = (item.findtext("title") or "").strip()
+                        link = (item.findtext("link") or "").strip()
+                        description = (item.findtext("description") or "").strip()
+                        pub_date = (item.findtext("pubDate") or "").strip()
+
+                        if not title or not link:
+                            continue
+
+                        published = ""
+                        if pub_date:
+                            try:
+                                published = parsedate_to_datetime(pub_date).isoformat()
+                            except Exception:
+                                published = pub_date
+
+                        articles.append({
+                            'source': {'name': source_name},
+                            'title': title,
+                            'description': description,
+                            'url': link,
+                            'publishedAt': published,
+                            'image_url': '',
+                            'video_url': NewsService._extract_video_from_rss_item(item),
+                            'category': category,
+                        })
+        except Exception:
+            pass
+
+        return articles
+
+    @staticmethod
+    async def fetch_crypto_news() -> list:
+        """Fetch crypto/blockchain news as a fallback source."""
+        articles = []
+        tasks = []
+        for feed_url, source_name in NewsService.CRYPTO_RSS_FEEDS:
+            tasks.append(NewsService._fetch_rss_feed_articles(feed_url, source_name, 'crypto'))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, list):
+                articles.extend(result)
+
+        # Trust crypto sources directly (they may not be in TRUSTED_NEWS_SOURCES).
+        logger.info(f"Fetched {len(articles)} crypto articles from RSS feeds")
+        return articles
+
+    @staticmethod
+    async def fetch_war_conflict_news() -> list:
+        """Fetch war/conflict/world news as a fallback source."""
+        articles = []
+        tasks = []
+        for feed_url, source_name in NewsService.WAR_CONFLICT_RSS_FEEDS:
+            tasks.append(NewsService._fetch_rss_feed_articles(feed_url, source_name, 'world'))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, list):
+                articles.extend(result)
+
+        logger.info(f"Fetched {len(articles)} world/conflict articles from RSS feeds")
+        return articles
+
+    @staticmethod
+    async def fetch_general_news() -> list:
+        """Fetch general/world news as a last-resort fallback source."""
+        articles = []
+        tasks = []
+        for feed_url, source_name in NewsService.GENERAL_NEWS_RSS_FEEDS:
+            tasks.append(NewsService._fetch_rss_feed_articles(feed_url, source_name, 'general'))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, list):
+                articles.extend(result)
+
+        logger.info(f"Fetched {len(articles)} general articles from RSS feeds")
+        return articles
+
+    @staticmethod
     async def fetch_news_newsapi(keywords: list, category: str, per_keyword: int = 5) -> list:
         """Fetch curated news from NewsAPI.org for specific keywords."""
         articles = []
@@ -649,36 +775,47 @@ class NewsService:
 
     @staticmethod
     async def fetch_all_news() -> list:
-        """Aggregate and deduplicate curated market + commodities news."""
-        try:
-            market_keywords = [
-                'stock market earnings guidance',
-                'federal reserve inflation rates stocks',
-                'us equities outlook reuters',
-                'wall street market close',
-            ]
-            commodity_keywords = [
-                'crude oil market supply opec',
-                'gold prices inflation central bank demand',
-                'natural gas futures storage',
-                'copper commodity demand china',
-            ]
+        """Aggregate and deduplicate market, crypto, war, and general news.
 
+        Priority order:
+        1. Primary financial sources (CNBC, RSS, AlphaVantage, NewsAPI)
+        2. Crypto/blockchain news (fallback)
+        3. War/conflict/world news (fallback)
+        4. General news (last resort)
+
+        If primary sources are empty or stale, falls back to secondary sources.
+        Never returns empty unless ALL sources fail.
+        """
+        try:
+            # ---- Step 1: Fetch primary financial sources ----
             cnbc_articles = await NewsService.fetch_news_cnbc_rss()
             public_rss_articles = await NewsService.fetch_news_public_rss()
             compact_newsapi = await NewsService.fetch_news_newsapi_compact()
+            av_articles = await NewsService.fetch_news_alphavantage()
+
             market_articles = []
             commodity_articles = []
             if not compact_newsapi and not NewsService._newsapi_in_cooldown():
+                market_keywords = [
+                    'stock market earnings guidance',
+                    'federal reserve inflation rates stocks',
+                    'us equities outlook reuters',
+                    'wall street market close',
+                ]
+                commodity_keywords = [
+                    'crude oil market supply opec',
+                    'gold prices inflation central bank demand',
+                    'natural gas futures storage',
+                    'copper commodity demand china',
+                ]
                 market_articles = await NewsService.fetch_news_newsapi(
                     market_keywords, category='market', per_keyword=2
                 )
                 commodity_articles = await NewsService.fetch_news_newsapi(
                     commodity_keywords, category='commodities', per_keyword=2
                 )
-            av_articles = await NewsService.fetch_news_alphavantage()
 
-            all_articles = (
+            primary_articles = (
                 cnbc_articles
                 + public_rss_articles
                 + compact_newsapi
@@ -687,106 +824,152 @@ class NewsService:
                 + av_articles
             )
             logger.info(
-                "News source counts | CNBC=%d PublicRSS=%d NewsAPICompact=%d NewsAPI=%d CommoditiesAPI=%d AlphaVantage=%d",
+                "Primary sources | CNBC=%d PublicRSS=%d NewsAPICompact=%d NewsAPI=%d AlphaVantage=%d",
                 len(cnbc_articles),
                 len(public_rss_articles),
                 len(compact_newsapi),
-                len(market_articles),
-                len(commodity_articles),
+                len(market_articles) + len(commodity_articles),
                 len(av_articles),
             )
 
-            # Deduplicate by URL and semantic story signature across outlets.
-            clustered_by_story = {}
-            seen_urls = set()
+            # Deduplicate primary articles
+            primary_deduped = NewsService._deduplicate_articles(primary_articles)
 
-            for article in all_articles:
-                url = NewsService._canonicalize_url(article.get('url', ''))
-                if not url or url in seen_urls:
-                    continue
-                article['url'] = url
-                seen_urls.add(url)
+            # Filter by recency (3h window for primary financial sources)
+            primary_fresh = [a for a in primary_deduped if NewsService._is_recent_article(a)]
 
-                title_norm = NewsService._normalize_title_for_dedupe(article.get('title', ''))
-                title_hash = hashlib.md5(title_norm.encode()).hexdigest()
-                story_sig = NewsService._story_signature(article) or title_hash
-                published = NewsService._parse_published_time(article.get('publishedAt', ''))
-                candidate_rank = (published, NewsService._article_score(article))
+            if primary_fresh:
+                logger.info(f"Primary sources returned {len(primary_fresh)} fresh articles")
+                return NewsService._select_and_balance_articles(primary_fresh)
 
-                current = clustered_by_story.get(story_sig)
-                if current is None:
-                    clustered_by_story[story_sig] = article
-                    continue
+            # ---- Step 2: Primary sources are dry - fetch fallback sources ----
+            logger.warning("Primary financial sources returned no fresh articles. Fetching fallback sources.")
 
-                current_published = NewsService._parse_published_time(current.get('publishedAt', ''))
-                current_rank = (current_published, NewsService._article_score(current))
-                if candidate_rank > current_rank:
-                    clustered_by_story[story_sig] = article
+            crypto_articles = await NewsService.fetch_crypto_news()
+            war_articles = await NewsService.fetch_war_conflict_news()
+            general_articles = await NewsService.fetch_general_news()
 
-            unique_articles = list(clustered_by_story.values())
-
-            fresh_articles = [a for a in unique_articles if NewsService._is_recent_article(a)]
-            # Removed strict stock/commodity filter to ensure relentless posting
-            focused_articles = fresh_articles
-            if not focused_articles:
-                logger.warning("No fresh articles found after filtering")
-                return []
-
-            def sort_key(article):
-                published = NewsService._parse_published_time(article.get('publishedAt', ''))
-                return (
-                    published,
-                    NewsService._article_score(article),
-                )
-
-            market_sorted = sorted(
-                [a for a in focused_articles if a.get('category') == 'market'],
-                key=sort_key,
-                reverse=True,
-            )
-            commodity_sorted = sorted(
-                [a for a in focused_articles if a.get('category') == 'commodities'],
-                key=sort_key,
-                reverse=True,
+            fallback_articles = crypto_articles + war_articles + general_articles
+            logger.info(
+                "Fallback sources | Crypto=%d World=%d General=%d",
+                len(crypto_articles),
+                len(war_articles),
+                len(general_articles),
             )
 
-            # Prefer mix of categories, then enforce source diversity so output is not single-source.
-            selected = market_sorted[:4] + commodity_sorted[:3]
-            if len(selected) < 6:
-                combined_ranked = sorted(focused_articles, key=sort_key, reverse=True)
-                seen_urls = {NewsService._canonicalize_url(a.get('url', '')) for a in selected}
-                for candidate in combined_ranked:
-                    url = NewsService._canonicalize_url(candidate.get('url', ''))
-                    if url and url not in seen_urls:
-                        candidate['url'] = url
-                        selected.append(candidate)
-                        seen_urls.add(url)
-                    if len(selected) >= 7:
-                        break
-            source_balanced = []
-            source_counts = {}
-            seen_urls_balanced = set()
-            for candidate in sorted(selected, key=sort_key, reverse=True):
-                source = (candidate.get('source', {}).get('name', 'unknown') or 'unknown').lower()
-                url = NewsService._canonicalize_url(candidate.get('url', ''))
-                if not url or url in seen_urls_balanced:
-                    continue
-                if source_counts.get(source, 0) >= NewsService.SOURCE_MAX_PER_CYCLE:
-                    continue
-                source_balanced.append(candidate)
-                source_counts[source] = source_counts.get(source, 0) + 1
-                seen_urls_balanced.add(url)
-                if len(source_balanced) >= 7:
-                    break
+            # Deduplicate fallback articles
+            fallback_deduped = NewsService._deduplicate_articles(fallback_articles)
 
-            if len(source_balanced) < 4:
-                # If balancing over-restricts a thin cycle, fall back to ranked selection.
-                return selected[:7]
-            return source_balanced[:7]
+            # Use wider recency window for fallback sources
+            if NewsService.FALLBACK_WINDOW_HOURS > NewsService.LATEST_NEWS_WINDOW_HOURS:
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=NewsService.FALLBACK_WINDOW_HOURS)
+                fallback_fresh = [
+                    a for a in fallback_deduped
+                    if NewsService._parse_published_time(a.get('publishedAt', '')) >= cutoff
+                ]
+            else:
+                fallback_fresh = fallback_deduped
+
+            if fallback_fresh:
+                logger.info(f"Fallback sources returned {len(fallback_fresh)} articles after dedup+recency filter")
+                return NewsService._select_and_balance_articles(fallback_fresh)
+
+            logger.error("ALL news sources (primary + fallback) returned empty results")
+            return []
 
         except Exception as e:
             logger.error(f"Failed to fetch all news: {e}")
             return []
+
+    @staticmethod
+    def _deduplicate_articles(articles: list) -> list:
+        """Deduplicate articles by URL and semantic story signature."""
+        clustered_by_story = {}
+        seen_urls = set()
+
+        for article in articles:
+            url = NewsService._canonicalize_url(article.get('url', ''))
+            if not url or url in seen_urls:
+                continue
+            article['url'] = url
+            seen_urls.add(url)
+
+            title_norm = NewsService._normalize_title_for_dedupe(article.get('title', ''))
+            title_hash = hashlib.md5(title_norm.encode()).hexdigest()
+            story_sig = NewsService._story_signature(article) or title_hash
+            published = NewsService._parse_published_time(article.get('publishedAt', ''))
+            candidate_rank = (published, NewsService._article_score(article))
+
+            current = clustered_by_story.get(story_sig)
+            if current is None:
+                clustered_by_story[story_sig] = article
+                continue
+
+            current_published = NewsService._parse_published_time(current.get('publishedAt', ''))
+            current_rank = (current_published, NewsService._article_score(current))
+            if candidate_rank > current_rank:
+                clustered_by_story[story_sig] = article
+
+        return list(clustered_by_story.values())
+
+    @staticmethod
+    def _select_and_balance_articles(articles: list) -> list:
+        """Select and balance articles across categories and sources."""
+        def sort_key(article):
+            published = NewsService._parse_published_time(article.get('publishedAt', ''))
+            return (published, NewsService._article_score(article))
+
+        # Sort by category
+        category_sorted = {
+            'market': sorted([a for a in articles if a.get('category') == 'market'], key=sort_key, reverse=True),
+            'commodities': sorted([a for a in articles if a.get('category') == 'commodities'], key=sort_key, reverse=True),
+            'crypto': sorted([a for a in articles if a.get('category') == 'crypto'], key=sort_key, reverse=True),
+            'world': sorted([a for a in articles if a.get('category') == 'world'], key=sort_key, reverse=True),
+            'general': sorted([a for a in articles if a.get('category') == 'general'], key=sort_key, reverse=True),
+        }
+
+        # Prefer financial content, then mix in other categories
+        selected = (
+            category_sorted['market'][:3]
+            + category_sorted['commodities'][:2]
+            + category_sorted['crypto'][:2]
+            + category_sorted['world'][:2]
+            + category_sorted['general'][:1]
+        )
+
+        # Fill remaining slots if needed
+        if len(selected) < 6:
+            seen_urls = {NewsService._canonicalize_url(a.get('url', '')) for a in selected}
+            all_ranked = sorted(articles, key=sort_key, reverse=True)
+            for candidate in all_ranked:
+                url = NewsService._canonicalize_url(candidate.get('url', ''))
+                if url and url not in seen_urls:
+                    selected.append(candidate)
+                    seen_urls.add(url)
+                if len(selected) >= 7:
+                    break
+
+        # Enforce source diversity
+        source_balanced = []
+        source_counts = {}
+        seen_urls_balanced = set()
+        for candidate in sorted(selected, key=sort_key, reverse=True):
+            source = (candidate.get('source', {}).get('name', 'unknown') or 'unknown').lower()
+            url = NewsService._canonicalize_url(candidate.get('url', ''))
+            if not url or url in seen_urls_balanced:
+                continue
+            if source_counts.get(source, 0) >= NewsService.SOURCE_MAX_PER_CYCLE:
+                continue
+            source_balanced.append(candidate)
+            source_counts[source] = source_counts.get(source, 0) + 1
+            seen_urls_balanced.add(url)
+            if len(source_balanced) >= 7:
+                break
+
+        if len(source_balanced) < 3:
+            # If balancing over-restricts, fall back to top-ranked.
+            return selected[:7]
+        return source_balanced[:7]
 
     @staticmethod
     def make_news_id(article: dict) -> str:

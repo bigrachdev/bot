@@ -28,6 +28,12 @@ stop_event: asyncio.Event = None
 
 NEWS_INTERVAL_SECONDS = NEWS_INTERVAL_MINUTES * 60
 ANALYSIS_INTERVAL_SECONDS = ANALYSIS_INTERVAL_MINUTES * 60
+QUICK_RETRY_SECONDS = 10 * 60  # 10 min retry when no news available
+
+
+class NoContentAvailable(Exception):
+    """Raised when all news sources are empty and bot has nothing to post."""
+    pass
 
 
 async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
@@ -53,6 +59,10 @@ async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
             await job_coro(bot_instance)
             logger.info(f"{name}: execution completed")
             next_run = loop.time() + interval_seconds
+        except NoContentAvailable:
+            # All sources empty - recheck in 10 minutes instead of full interval.
+            logger.warning(f"{name}: no content available, quick retry in {QUICK_RETRY_SECONDS}s")
+            next_run = loop.time() + QUICK_RETRY_SECONDS
         except Exception as e:
             logger.error(f"{name}: execution failed: {e}")
             # Retry sooner after failure rather than waiting full interval.
@@ -70,6 +80,25 @@ async def startup_post(bot_instance, max_wait_seconds: int = 60, poll_interval_s
                 chat_id = int(TARGET_CHANNEL_ID)
                 chat_list = [(chat_id, 'channel')]
                 logger.info(f"Target channel {chat_id} configured. Running startup posts.")
+
+                # Post online confirmation immediately.
+                from datetime import datetime, timezone
+                from services.posting import PostingService
+                try:
+                    health_msg = (
+                        f"<b>Market Bot Online</b>\n"
+                        f"Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+                        f"News interval: {NEWS_INTERVAL_MINUTES}m | Analysis interval: {ANALYSIS_INTERVAL_MINUTES}m\n\n"
+                        f"<i>{PostingService.DISCLAIMER}</i>"
+                    )
+                    await bot_instance.bot.send_message(
+                        chat_id=chat_id,
+                        text=health_msg,
+                        parse_mode="HTML",
+                    )
+                    logger.info("Startup health message posted.")
+                except Exception as e:
+                    logger.error(f"Failed to post startup health message: {e}")
 
                 try:
                     await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
