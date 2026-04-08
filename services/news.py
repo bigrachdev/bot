@@ -11,12 +11,14 @@ from urllib.parse import urlparse, urlunparse
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 from utils.logger import logger
-from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY, MAX_NEWS_AGE_HOURS
+from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY
 
 
 class NewsService:
     """Handle news fetching from multiple sources"""
     RELEVANCE_MAX_SCORE = 15
+    LATEST_NEWS_WINDOW_HOURS = 4
+    MIN_DISTINCT_TOKENS_FOR_SIGNATURE = 3
     REQUEST_HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -40,6 +42,13 @@ class NewsService:
         'yahoo finance',
         'seeking alpha',
         'forbes',
+        'cnn business',
+        'cnn',
+        'the new york times',
+        'new york times',
+        'the washington post',
+        'washington post',
+        'business insider',
     }
 
     TRUSTED_NEWS_DOMAINS = (
@@ -57,6 +66,10 @@ class NewsService:
         'forbes.com',
         'nasdaq.com',
         'kitco.com',
+        'cnn.com',
+        'nytimes.com',
+        'washingtonpost.com',
+        'businessinsider.com',
     )
 
     SUPPORTED_VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov')
@@ -109,6 +122,12 @@ class NewsService:
     NEWSAPI_COOLDOWN_HOURS = 6
     _newsapi_cooldown_until = None
 
+    STORY_SIGNATURE_STOPWORDS = {
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'in',
+        'into', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'to', 'up', 'with',
+        'after', 'amid', 'over', 'under', 'near', 'new', 'says', 'say'
+    }
+
     @staticmethod
     def _parse_published_time(value: str) -> datetime:
         """Parse provider publish timestamps into timezone-aware UTC datetimes."""
@@ -134,14 +153,21 @@ class NewsService:
 
     @staticmethod
     def _is_recent_article(article: dict) -> bool:
-        """True when article has a publish time within the configured freshness window."""
+        """True when article has a publish time within strict latest-news window."""
         published = article.get('publishedAt') or ''
         published_dt = NewsService._parse_published_time(published)
         if published_dt == datetime.min.replace(tzinfo=timezone.utc):
             return False
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=NewsService.LATEST_NEWS_WINDOW_HOURS)
         return published_dt >= cutoff
+
+    @staticmethod
+    def _latest_from_time_iso() -> str:
+        """Return ISO timestamp used for upstream API recency filtering."""
+        return (
+            datetime.now(timezone.utc) - timedelta(hours=NewsService.LATEST_NEWS_WINDOW_HOURS)
+        ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
     @staticmethod
     def _classify_category(title: str, description: str, fallback: str = 'market') -> str:
@@ -234,6 +260,25 @@ class NewsService:
         t = re.sub(r"[^a-z0-9\s]", " ", t)
         t = re.sub(r"\s+", " ", t).strip()
         return t
+
+    @staticmethod
+    def _story_signature(article: dict) -> str:
+        """Create a semantic signature so same story across outlets clusters together."""
+        text = NewsService._normalize_title_for_dedupe(article.get('title', ''))
+        tokens = [tok for tok in text.split() if tok and tok not in NewsService.STORY_SIGNATURE_STOPWORDS]
+        if not tokens:
+            return ''
+
+        prioritized = []
+        for token in tokens:
+            if token not in prioritized:
+                prioritized.append(token)
+            if len(prioritized) >= 8:
+                break
+
+        if len(prioritized) < NewsService.MIN_DISTINCT_TOKENS_FOR_SIGNATURE:
+            return ''
+        return "|".join(prioritized)
 
     @staticmethod
     def _normalize_article(raw: dict, category: str) -> dict:
@@ -374,6 +419,9 @@ class NewsService:
             "https://www.investing.com/rss/news_25.rss",
             "https://www.nasdaq.com/feed/rssoutbound?category=Markets",
             "https://www.nasdaq.com/feed/rssoutbound?category=Commodities",
+            "https://rss.cnn.com/rss/money_latest.rss",
+            "https://rss.cnn.com/rss/money_markets.rss",
+            "https://www.businessinsider.com/rss",
         ]
         articles = []
 
@@ -450,9 +498,7 @@ class NewsService:
                 for keyword in keywords:
                     if saw_rate_limit:
                         break
-                    from_time = (
-                        datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
-                    ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+                    from_time = NewsService._latest_from_time_iso()
                     url = (
                         "https://newsapi.org/v2/everything"
                         f"?q={quote(keyword)}"
@@ -509,8 +555,8 @@ class NewsService:
         try:
             async with aiohttp.ClientSession() as session:
                 from_time = (
-                    datetime.now(timezone.utc) - timedelta(hours=MAX_NEWS_AGE_HOURS)
-                ).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+                    NewsService._latest_from_time_iso()
+                )
 
                 for query, category in query_sets:
                     url = (
@@ -650,22 +696,34 @@ class NewsService:
                 len(av_articles),
             )
 
-            # Deduplicate by exact normalized title hash.
-            unique_articles = []
-            seen_titles = set()
+            # Deduplicate by URL and semantic story signature across outlets.
+            clustered_by_story = {}
             seen_urls = set()
 
             for article in all_articles:
-                title = article.get('title', '')
-                title_norm = NewsService._normalize_title_for_dedupe(title)
-                title_hash = hashlib.md5(title_norm.encode()).hexdigest()
                 url = NewsService._canonicalize_url(article.get('url', ''))
+                if not url or url in seen_urls:
+                    continue
+                article['url'] = url
+                seen_urls.add(url)
 
-                if title_hash not in seen_titles and url not in seen_urls:
-                    article['url'] = url
-                    unique_articles.append(article)
-                    seen_titles.add(title_hash)
-                    seen_urls.add(url)
+                title_norm = NewsService._normalize_title_for_dedupe(article.get('title', ''))
+                title_hash = hashlib.md5(title_norm.encode()).hexdigest()
+                story_sig = NewsService._story_signature(article) or title_hash
+                published = NewsService._parse_published_time(article.get('publishedAt', ''))
+                candidate_rank = (published, NewsService._article_score(article))
+
+                current = clustered_by_story.get(story_sig)
+                if current is None:
+                    clustered_by_story[story_sig] = article
+                    continue
+
+                current_published = NewsService._parse_published_time(current.get('publishedAt', ''))
+                current_rank = (current_published, NewsService._article_score(current))
+                if candidate_rank > current_rank:
+                    clustered_by_story[story_sig] = article
+
+            unique_articles = list(clustered_by_story.values())
 
             fresh_articles = [a for a in unique_articles if NewsService._is_recent_article(a)]
             focused_articles = [a for a in fresh_articles if NewsService._is_stock_or_commodity_article(a)]
@@ -676,8 +734,8 @@ class NewsService:
             def sort_key(article):
                 published = NewsService._parse_published_time(article.get('publishedAt', ''))
                 return (
-                    NewsService._article_score(article),
                     published,
+                    NewsService._article_score(article),
                 )
 
             market_sorted = sorted(
@@ -732,9 +790,17 @@ class NewsService:
     @staticmethod
     def make_news_id(article: dict) -> str:
         """Generate stable cache key for an article."""
-        canonical_url = NewsService._canonicalize_url(article.get('url', ''))
-        normalized_title = NewsService._normalize_title_for_dedupe(article.get('title', ''))
-        seed = f"{canonical_url}|{normalized_title}".lower().strip()
+        published = NewsService._parse_published_time(article.get('publishedAt', ''))
+        day_bucket = ""
+        if published != datetime.min.replace(tzinfo=timezone.utc):
+            day_bucket = published.strftime("%Y-%m-%d")
+
+        signature = NewsService._story_signature(article)
+        if not signature:
+            signature = NewsService._normalize_title_for_dedupe(article.get('title', ''))
+
+        category = (article.get('category') or 'market').lower()
+        seed = f"{category}|{day_bucket}|{signature}".lower().strip()
         return hashlib.md5(seed.encode()).hexdigest()
 
     @staticmethod
