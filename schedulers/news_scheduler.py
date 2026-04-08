@@ -6,7 +6,6 @@ import asyncio
 from config.settings import (
     POST_MAX_NEWS_PER_CYCLE,
     POST_MIN_SECONDS_BETWEEN_MESSAGES,
-    SEND_BRIEFING_INTRO,
     TARGET_CHANNEL_ID,
 )
 from services.news import NewsService
@@ -94,24 +93,10 @@ class NewsScheduler:
 
             # If we have fresh news, broadcast it.
             if selected_articles:
-                intro = PostingService.format_news_briefing_intro(selected_articles)
-
                 successful = 0
                 failed = 0
 
                 for cid, _chat_type in chat_list:
-                    if SEND_BRIEFING_INTRO:
-                        try:
-                            await bot_instance.bot.send_message(
-                                chat_id=cid,
-                                text=intro,
-                                parse_mode="HTML",
-                                disable_web_page_preview=True,
-                            )
-                            await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
-                        except Exception as e:
-                            logger.error(f"Failed to send briefing intro to chat {cid}: {e}")
-
                     for rank, article in enumerate(selected_articles, start=1):
                         caption = PostingService.format_news_article_card(
                             article=article,
@@ -187,7 +172,7 @@ class NewsScheduler:
             if not articles:
                 await bot_instance.bot.send_message(
                     chat_id=chat_id,
-                    text="No high-quality stock or commodities stories found right now. Please try again later.",
+                    text="No market news available at the moment. The next update will include new headlines.",
                 )
                 return
 
@@ -198,17 +183,6 @@ class NewsScheduler:
                     text="No fresh stories in this cycle. The next update will include new market headlines.",
                 )
                 return
-
-            intro = PostingService.format_news_briefing_intro(selected_articles)
-
-            if SEND_BRIEFING_INTRO:
-                await bot_instance.bot.send_message(
-                    chat_id=chat_id,
-                    text=intro,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
 
             for rank, article in enumerate(selected_articles, start=1):
                 caption = PostingService.format_news_article_card(
