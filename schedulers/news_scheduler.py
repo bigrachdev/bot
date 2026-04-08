@@ -2,6 +2,7 @@
 News broadcasting scheduler
 """
 import asyncio
+import random
 from utils.logger import logger
 from services.news import NewsService
 
@@ -46,11 +47,11 @@ class NewsScheduler:
 
     @staticmethod
     async def broadcast_news(bot_instance, chat_list: list = None):
-        """Broadcast latest curated news as separate detailed posts."""
+        """Broadcast one major headline from each source with stock prices every 20-30 mins."""
         try:
-            logger.info("Starting news broadcast...")
+            logger.info("Starting news broadcast (one headline per source)...")
 
-            # Fetch news
+            # Fetch all news
             articles = await NewsService.fetch_all_news()
             if not articles:
                 logger.warning("No articles fetched for broadcast")
@@ -64,29 +65,39 @@ class NewsScheduler:
                 logger.info("No subscribed chats for news broadcast")
                 return
 
-            fresh_articles = []
-            seen_ids = set()
+            # Group articles by source and pick the top one from each
+            source_articles = {}
             for article in articles:
-                news_id = NewsService.make_news_id(article)
-                if news_id in seen_ids:
-                    continue
-                seen_ids.add(news_id)
-                if not bot_instance.is_news_cached(news_id):
-                    fresh_articles.append((news_id, article))
+                source_name = (article.get('source', {}).get('name', 'Unknown') or 'Unknown').lower()
+                if source_name not in source_articles:
+                    source_articles[source_name] = article
 
-            if not fresh_articles:
-                logger.info("All curated articles are already cached; skipping broadcast")
+            # Get unique sources
+            unique_sources = list(source_articles.keys())
+            logger.info(f"Found {len(unique_sources)} unique news sources")
+
+            # Filter out already cached articles
+            fresh_sources = {}
+            for source_name, article in source_articles.items():
+                news_id = NewsService.make_news_id(article)
+                if not bot_instance.is_news_cached(news_id):
+                    fresh_sources[source_name] = article
+
+            if not fresh_sources:
+                logger.info("All source headlines are already cached; skipping broadcast")
                 return
 
+            # Send one headline from each fresh source
             successful = 0
             failed = 0
-            sent_per_article = {news_id: 0 for news_id, _ in fresh_articles}
 
             for chat_id, _chat_type in chat_list:
-                for news_id, article in fresh_articles:
-                    caption = NewsService.format_article_caption(article)
+                for source_name, article in fresh_sources.items():
+                    # Format message with article + stock prices
+                    caption = await NewsScheduler.format_news_with_stocks(article)
                     image_url = (article.get('image_url') or '').strip()
                     video_url = (article.get('video_url') or '').strip()
+                    
                     try:
                         await NewsScheduler._send_article_with_fallback(
                             bot_instance=bot_instance,
@@ -95,31 +106,61 @@ class NewsScheduler:
                             image_url=image_url,
                             video_url=video_url,
                         )
-                        sent_per_article[news_id] += 1
                         successful += 1
+                        
+                        # Cache this article
+                        news_id = NewsService.make_news_id(article)
+                        bot_instance.cache_news(
+                            news_id,
+                            article.get('title', ''),
+                            article.get('source', {}).get('name', 'Unknown'),
+                            article.get('url', ''),
+                        )
                     except Exception as e:
                         logger.error(
-                            f"Failed to send article '{article.get('title', '')[:40]}' to chat {chat_id}: {e}"
+                            f"Failed to send article from {source_name} to chat {chat_id}: {e}"
                         )
                         failed += 1
 
                     # Brief delay to avoid rate limiting
-                    await asyncio.sleep(0.6)
-
-            # Cache article after it was posted to at least one chat.
-            for news_id, article in fresh_articles:
-                if sent_per_article.get(news_id, 0) > 0:
-                    bot_instance.cache_news(
-                        news_id,
-                        article.get('title', ''),
-                        article.get('source', {}).get('name', 'Unknown'),
-                        article.get('url', ''),
-                    )
+                    await asyncio.sleep(0.8)
 
             logger.info(f"News broadcast complete: {successful} successful, {failed} failed")
 
         except Exception as e:
             logger.error(f"News broadcast failed: {e}")
+
+    @staticmethod
+    async def format_news_with_stocks(article: dict) -> str:
+        """Format a news article with current stock prices."""
+        from services.analysis import AnalysisService
+        
+        # Format the news article
+        news_caption = NewsService.format_article_caption(article)
+        
+        # Add a separator and stock market snapshot
+        stock_header = (
+            "\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📊 <b>Market Snapshot</b>\n"
+        )
+        
+        # Fetch top stock prices
+        try:
+            stock_prices = await AnalysisService.fetch_top_stock_prices()
+            
+            if stock_prices:
+                stock_prices_text = ""
+                for stock in stock_prices:
+                    stock_prices_text += f"• {stock['name']} ({stock['symbol']}): {stock['price']}\n"
+                stock_header += stock_prices_text
+            else:
+                stock_header += "Market data temporarily unavailable\n"
+        except Exception as e:
+            logger.warning(f"Failed to fetch stock prices for news post: {e}")
+            stock_header += "Market data loading...\n"
+        
+        return news_caption + stock_header
 
     @staticmethod
     async def send_news_to_chat(bot_instance, chat_id: int):
@@ -136,7 +177,7 @@ class NewsScheduler:
                 return
 
             for article in articles:
-                caption = NewsService.format_article_caption(article)
+                caption = await NewsScheduler.format_news_with_stocks(article)
                 image_url = (article.get('image_url') or '').strip()
                 video_url = (article.get('video_url') or '').strip()
                 await NewsScheduler._send_article_with_fallback(

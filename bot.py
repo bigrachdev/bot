@@ -22,7 +22,7 @@ logger = setup_logging()
 bot_instance = None
 stop_event: asyncio.Event = None
 
-NEWS_INTERVAL_SECONDS = 15 * 60
+NEWS_INTERVAL_SECONDS = 25 * 60  # 25 minutes - one headline from each source
 ANALYSIS_INTERVAL_SECONDS = 60 * 60
 AD_INTERVAL_SECONDS = 4 * 60 * 60
 
@@ -117,7 +117,7 @@ async def setup_bot():
         logger.info("Command handlers registered")
 
         logger.info("Periodic broadcasters configured")
-        logger.info("News broadcast interval: 15 minutes")
+        logger.info("News broadcast interval: 25 minutes (one headline per source)")
         logger.info("Analysis broadcast interval: 1 hour")
         logger.info("Omnex ad broadcast interval: 4 hours")
 

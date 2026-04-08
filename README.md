@@ -5,7 +5,9 @@ A Telegram bot that provides real-time market news, technical analysis, and trad
  Features
 
  📰 News Broadcasting
-- Hourly news aggregation from multiple sources (NewsAPI, IEX Cloud)
+- News aggregation every 25 minutes from multiple sources (CNBC RSS, MarketWatch, Yahoo Finance, Investing.com, NewsAPI, Alpha Vantage)
+- One major headline from each source per broadcast (avoids flooding, ensures source diversity)
+- Each post includes full article details + live stock prices from Finnhub
 - Automatic broadcasting to all subscribed channels/groups
 - De-duplication - won't post the same news twice within 24 hours
 - On-demand news - Users can request news anytime with the "Get News Now" button
@@ -61,8 +63,8 @@ For News Features (at least one required):
 - `NEWSAPI_KEY` - Free from [NewsAPI.org](https://newsapi.org/) (generous free tier)
 - `ALPHAVANTAGE_KEY` - Free from [Alpha Vantage](https://www.alphavantage.co/) (25 calls/day on free tier)
 
-For Enhanced Technical Analysis (optional but recommended):
-- `FINNHUB_KEY` - Free from [Finnhub](https://finnhub.io/) (60 calls/minute, includes RSI, MACD, SMA indicators)
+For Enhanced Technical Analysis (required for stock prices):
+- `FINNHUB_KEY` - Free from [Finnhub](https://finnhub.io/) (60 calls/minute, includes RSI, MACD, SMA indicators AND real-time stock prices)
 
  3. Run the Bot
 ```bash

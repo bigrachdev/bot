@@ -231,3 +231,55 @@ class AnalysisService:
             message += f"   SMA20: {sma20} | SMA50: {sma50}\n\n"
 
         return message
+
+    @staticmethod
+    async def fetch_top_stock_prices() -> list:
+        """Fetch current prices for top stocks using Finnhub API (lightweight and fast)."""
+        prices = []
+        
+        if not FINNHUB_KEY:
+            logger.warning("FINNHUB_KEY not set - cannot fetch stock prices")
+            return prices
+        
+        # Only fetch first 5 to keep it fast and lightweight
+        candidates = [
+            s for s in TOP_STOCKS
+            if (s.get("exchange", "").upper() in {"NASDAQ", "NYSE"})
+        ][:5]
+
+        async with aiohttp.ClientSession() as session:
+            for stock_data in candidates:
+                symbol = stock_data['symbol']
+                name = stock_data['name']
+                
+                try:
+                    # Use Finnhub quote API for current price
+                    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
+                    
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            
+                            # Finnhub returns: c (current price), h (high), l (low), o (open), pc (previous close), t (timestamp)
+                            current_price = data.get('c')
+                            
+                            if current_price and isinstance(current_price, (int, float)) and current_price > 0:
+                                prices.append({
+                                    'name': name,
+                                    'symbol': symbol,
+                                    'price': f"${current_price:.2f}"
+                                })
+                            else:
+                                logger.debug(f"Invalid price data for {symbol}: {data}")
+                        else:
+                            logger.warning(f"Finnhub quote API returned {resp.status} for {symbol}")
+                    
+                    # Brief delay to respect rate limits (60 calls/min on free tier)
+                    await asyncio.sleep(1.2)
+                    
+                except Exception as e:
+                    logger.debug(f"Could not fetch price for {symbol} via Finnhub: {e}")
+                    continue
+
+        logger.info(f"Fetched prices for {len(prices)} stocks via Finnhub")
+        return prices

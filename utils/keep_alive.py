@@ -31,17 +31,23 @@ def start_server(port=8080):
 async def ping_server(port=8080):
     """Ping the server periodically to keep it alive"""
     url = f"http://localhost:{port}/"
+    ping_count = 0
 
     while True:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
-                        logger.debug("Keep-alive ping successful")
+                        ping_count += 1
+                        if ping_count % 10 == 0:
+                            logger.info(f"Keep-alive ping successful (#{ping_count})")
+                        else:
+                            logger.debug(f"Keep-alive ping successful (#{ping_count})")
         except Exception as e:
             logger.warning(f"Keep-alive ping failed: {e}")
 
-        await asyncio.sleep(KEEP_ALIVE_INTERVAL)
+        # Ping more frequently (every 2-3 minutes) to prevent sleep
+        await asyncio.sleep(min(KEEP_ALIVE_INTERVAL, 120))
 
 def start_keep_alive():
     """Start the keep-alive server in a background thread"""

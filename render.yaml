@@ -21,3 +21,7 @@ services:
         sync: false
       - key: TARGET_CHANNELS
         sync: false
+      - key: KEEP_ALIVE
+        value: "True"
+      - key: KEEP_ALIVE_INTERVAL
+        value: "150"
