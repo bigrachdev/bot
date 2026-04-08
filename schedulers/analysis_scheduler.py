@@ -33,47 +33,36 @@ class AnalysisScheduler:
                 logger.info("No target channel configured for analysis broadcast")
                 return
 
+            chat_id, _ = chat_list[0]
+
             stock_prices = await AnalysisService.fetch_top_stock_prices()
             snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
 
             signals = await AnalysisService.fetch_top_stocks_analysis()
-            message = PostingService.format_analysis_bulletin(signals, "Stocks")
 
-            if not signals:
-                status = AnalysisService.get_last_status()
-                logger.info("No stock performance data detected")
-                if status == "rate_limited" and chat_list:
-                    message = (
-                        "<b>Stocks Signal Bulletin</b>\n"
-                        "Data providers are temporarily rate-limiting requests. "
-                        "The bot will retry automatically on the next cycle."
-                    )
+            if signals:
+                message = PostingService.format_analysis_bulletin(signals, "Stocks")
+            else:
+                message = PostingService.format_analysis_bulletin([], "Stocks")
 
-            successful = 0
-            failed = 0
-
-            for chat_id, _chat_type in chat_list:
+            for cid, _chat_type in chat_list:
                 try:
                     await bot_instance.bot.send_message(
-                        chat_id=chat_id,
+                        chat_id=cid,
                         text=snapshot_message,
                         parse_mode='HTML',
                     )
                     await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
 
                     await bot_instance.bot.send_message(
-                        chat_id=chat_id,
+                        chat_id=cid,
                         text=message,
                         parse_mode='HTML',
                     )
-                    successful += 1
                 except Exception as e:
-                    logger.error(f"Failed to send analysis to chat {chat_id}: {e}")
-                    failed += 1
+                    logger.error(f"Failed to send analysis to chat {cid}: {e}")
 
-                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
-
-            logger.info(f"Analysis broadcast complete: {successful} successful, {failed} failed")
+            logger.info("Analysis broadcast complete")
 
         except Exception as e:
             logger.error(f"Analysis broadcast failed: {e}")
