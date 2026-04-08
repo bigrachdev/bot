@@ -60,7 +60,7 @@ class PostingService:
         url = (article.get("url", "") or "").replace("'", "%27")
 
         return (
-            f"<b>Story {rank}/{total} | {category} | {topic}</b>\n"
+            f"<b>{category} | {topic}</b>\n"
             f"<b>{title}</b>\n\n"
             f"<b>What happened</b>\n{description}\n\n"
             f"<b>{impact_line}</b>\n\n"
