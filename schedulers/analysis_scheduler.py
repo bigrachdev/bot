@@ -2,7 +2,7 @@
 Analysis broadcasting scheduler
 """
 import asyncio
-from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES
+from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES, TARGET_CHANNEL_ID
 from services.posting import PostingService
 from utils.logger import logger
 from services.analysis import AnalysisService
@@ -13,15 +13,24 @@ class AnalysisScheduler:
 
     @staticmethod
     async def broadcast_analysis(bot_instance, chat_list: list = None):
-        """Broadcast stock performance snapshots to subscribed chats."""
+        """Broadcast stock performance snapshots to the target channel."""
         try:
             logger.info("Starting analysis broadcast...")
 
             if chat_list is None:
-                chat_list = bot_instance.get_subscribed_chats()
+                if TARGET_CHANNEL_ID:
+                    try:
+                        chat_id = int(TARGET_CHANNEL_ID)
+                        chat_list = [(chat_id, 'channel')]
+                    except ValueError:
+                        logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
+                        return
+                else:
+                    logger.warning("TARGET_CHANNEL_ID not set")
+                    return
 
             if not chat_list:
-                logger.info("No subscribed chats for analysis broadcast")
+                logger.info("No target channel configured for analysis broadcast")
                 return
 
             stock_prices = await AnalysisService.fetch_top_stock_prices()

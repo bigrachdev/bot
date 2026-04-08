@@ -1,5 +1,6 @@
 """
 Main bot initialization and event loop
+Posts finance news to a single target channel on a schedule.
 """
 import asyncio
 import signal
@@ -8,19 +9,15 @@ from telegram.error import Conflict
 
 from utils.logger import setup_logging
 from config.settings import (
-    AD_INTERVAL_MINUTES,
     ANALYSIS_INTERVAL_MINUTES,
     BOT_TOKEN,
     KEEP_ALIVE,
     NEWS_INTERVAL_MINUTES,
-    YOUR_ADMIN_ID,
+    TARGET_CHANNEL_ID,
 )
 from database.db import MarketBot
-from handlers.user_commands import setup_user_handlers
-from handlers.admin_commands import setup_admin_handlers
 from schedulers.news_scheduler import NewsScheduler
 from schedulers.analysis_scheduler import AnalysisScheduler
-from schedulers.ad_scheduler import AdScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
 
@@ -31,7 +28,6 @@ stop_event: asyncio.Event = None
 
 NEWS_INTERVAL_SECONDS = NEWS_INTERVAL_MINUTES * 60
 ANALYSIS_INTERVAL_SECONDS = ANALYSIS_INTERVAL_MINUTES * 60
-AD_INTERVAL_SECONDS = AD_INTERVAL_MINUTES * 60
 
 
 async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
@@ -65,49 +61,46 @@ async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
     logger.info(f"{name} loop stopped")
 
 
-async def startup_auto_broadcast(
-    bot_instance,
-    max_wait_seconds: int = 600,
-    poll_interval_seconds: int = 20,
-):
-    """Wait for targets, then run immediate startup broadcasts."""
+async def startup_post(bot_instance, max_wait_seconds: int = 60, poll_interval_seconds: int = 10):
+    """Wait for target channel to be configured, then do immediate first post."""
     elapsed = 0
     while elapsed <= max_wait_seconds:
-        chat_list = bot_instance.get_subscribed_chats()
-        if chat_list:
-            logger.info(
-                f"Detected {len(chat_list)} target chat(s)/channel(s). Running startup broadcasts."
-            )
+        if TARGET_CHANNEL_ID:
             try:
-                await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
-            except Exception as e:
-                logger.error(f"Startup news broadcast failed: {e}")
+                chat_id = int(TARGET_CHANNEL_ID)
+                chat_list = [(chat_id, 'channel')]
+                logger.info(f"Target channel {chat_id} configured. Running startup posts.")
 
-            try:
-                await AdScheduler.broadcast_omnex_ad(bot_instance, chat_list=chat_list)
-            except Exception as e:
-                logger.error(f"Startup ad broadcast failed: {e}")
+                try:
+                    await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
+                except Exception as e:
+                    logger.error(f"Startup news post failed: {e}")
 
-            return
+                try:
+                    await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=chat_list)
+                except Exception as e:
+                    logger.error(f"Startup analysis post failed: {e}")
 
-        logger.info("No targets detected yet. Waiting before auto-broadcast retry...")
+                return
+            except ValueError:
+                logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
+                return
+
+        logger.info("Waiting for TARGET_CHANNEL_ID configuration...")
         await asyncio.sleep(poll_interval_seconds)
         elapsed += poll_interval_seconds
 
-    logger.warning(
-        "Startup auto-broadcast timed out without detected targets. "
-        "Periodic loops remain active and will continue retrying."
-    )
+    logger.warning("Startup post timed out. Periodic loops remain active.")
 
 
 async def setup_bot():
-    """Initialize bot, database, and handlers."""
+    """Initialize bot and database."""
     global bot_instance
 
     try:
         logger.info("Initializing Market Bot...")
 
-        bot_instance = MarketBot(YOUR_ADMIN_ID)
+        bot_instance = MarketBot()
         logger.info("Database initialized")
 
         application = Application.builder().token(BOT_TOKEN).build()
@@ -116,17 +109,13 @@ async def setup_bot():
         application.bot_data["bot"] = application.bot
         bot_instance.bot = application.bot
 
-        target_chats = bot_instance.get_subscribed_chats()
-        logger.info(f"Initial broadcast targets loaded: {len(target_chats)} chats/channels")
+        if TARGET_CHANNEL_ID:
+            logger.info(f"Target channel: {TARGET_CHANNEL_ID}")
+        else:
+            logger.warning("TARGET_CHANNEL_ID not set - bot will not post anywhere")
 
-        setup_user_handlers(application)
-        setup_admin_handlers(application)
-        logger.info("Command handlers registered")
-
-        logger.info("Periodic broadcasters configured")
         logger.info("News broadcast interval: %d minutes", NEWS_INTERVAL_MINUTES)
         logger.info("Analysis broadcast interval: %d minutes", ANALYSIS_INTERVAL_MINUTES)
-        logger.info("Omnex ad broadcast interval: %d minutes", AD_INTERVAL_MINUTES)
 
         return application
 
@@ -167,16 +156,16 @@ async def main():
             error_callback=on_polling_error,
         )
 
-        # Fire immediate startup posts when a target exists.
-        warmup_task = asyncio.create_task(startup_auto_broadcast(bot_instance))
+        # Fire immediate startup posts.
+        warmup_task = asyncio.create_task(startup_post(bot_instance))
 
         def _log_warmup_outcome(task: asyncio.Task):
             if task.cancelled():
-                logger.warning("Startup auto-broadcast task was cancelled")
+                logger.warning("Startup post task was cancelled")
                 return
             err = task.exception()
             if err:
-                logger.error(f"Startup auto-broadcast task failed: {err}")
+                logger.error(f"Startup post task failed: {err}")
 
         warmup_task.add_done_callback(_log_warmup_outcome)
 
@@ -187,9 +176,6 @@ async def main():
             ),
             asyncio.create_task(
                 _run_periodic_job("analysis_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis)
-            ),
-            asyncio.create_task(
-                _run_periodic_job("omnex_ad_broadcast", AD_INTERVAL_SECONDS, AdScheduler.broadcast_omnex_ad)
             ),
         ]
 

@@ -10,29 +10,25 @@ load_dotenv()
 
 # Bot Token (Required)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-YOUR_ADMIN_ID = int(os.getenv('YOUR_ADMIN_ID', '0'))
 
 # Validate critical configuration
 if not BOT_TOKEN:
     logger.error("Missing critical configuration: BOT_TOKEN")
     raise Exception("BOT_TOKEN not found in .env file")
 
-if YOUR_ADMIN_ID == 0:
-    logger.warning("ADMIN_ID not set - admin commands will be disabled")
-
 # Database
 DB_NAME = 'market_bot.db'
-NEWS_CACHE_HOURS = 24  # Don't post same news for 24 hours
-MAX_NEWS_AGE_HOURS = int(os.getenv('MAX_NEWS_AGE_HOURS', '6'))
+NEWS_CACHE_HOURS = 3  # Don't repost same news within 3 hours
+MAX_NEWS_AGE_HOURS = int(os.getenv('MAX_NEWS_AGE_HOURS', '2'))  # Only fresh news
 
 # News API Keys
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 ALPHAVANTAGE_KEY = os.getenv('ALPHAVANTAGE_KEY', '')
 FINNHUB_KEY = os.getenv('FINNHUB_KEY', '')
 
-# Target Channels/Groups (comma-separated IDs)
-TARGET_CHANNELS_RAW = os.getenv('TARGET_CHANNELS', '')
-TARGET_CHANNELS = [ch.strip() for ch in TARGET_CHANNELS_RAW.split(',') if ch.strip()] if TARGET_CHANNELS_RAW else []
+# Target Channel (single channel ID for relentless posting)
+# Get channel ID by forwarding a message to @userinfobot
+TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', '')
 
 # Keep Alive (for Render/Heroku free tier)
 KEEP_ALIVE = os.getenv('KEEP_ALIVE', 'True').lower() in ('true', '1', 'yes')
@@ -46,7 +42,6 @@ SEND_BRIEFING_INTRO = os.getenv('SEND_BRIEFING_INTRO', 'True').lower() in ('true
 # Scheduler cadence (minutes)
 NEWS_INTERVAL_MINUTES = max(5, int(os.getenv('NEWS_INTERVAL_MINUTES', '25')))
 ANALYSIS_INTERVAL_MINUTES = max(15, int(os.getenv('ANALYSIS_INTERVAL_MINUTES', '60')))
-AD_INTERVAL_MINUTES = max(30, int(os.getenv('AD_INTERVAL_MINUTES', '240')))
 
 # Stock data - top 50 stocks
 TOP_STOCKS = [

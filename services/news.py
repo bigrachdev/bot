@@ -17,7 +17,7 @@ from config.settings import NEWSAPI_KEY, ALPHAVANTAGE_KEY
 class NewsService:
     """Handle news fetching from multiple sources"""
     RELEVANCE_MAX_SCORE = 15
-    LATEST_NEWS_WINDOW_HOURS = 4
+    LATEST_NEWS_WINDOW_HOURS = 3  # Only very recent news for freshness
     MIN_DISTINCT_TOKENS_FOR_SIGNATURE = 3
     REQUEST_HEADERS = {
         "User-Agent": (
@@ -726,9 +726,10 @@ class NewsService:
             unique_articles = list(clustered_by_story.values())
 
             fresh_articles = [a for a in unique_articles if NewsService._is_recent_article(a)]
-            focused_articles = [a for a in fresh_articles if NewsService._is_stock_or_commodity_article(a)]
+            # Removed strict stock/commodity filter to ensure relentless posting
+            focused_articles = fresh_articles
             if not focused_articles:
-                logger.warning("No stock/commodity-focused articles found after filtering")
+                logger.warning("No fresh articles found after filtering")
                 return []
 
             def sort_key(article):

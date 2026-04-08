@@ -8,7 +8,8 @@
       "Bash(timeout *)",
       "Bash(type *)",
       "Bash(findstr *)",
-      "Bash(taskkill *)"
+      "Bash(taskkill *)",
+      "Bash(del *)"
     ]
   },
   "$version": 3

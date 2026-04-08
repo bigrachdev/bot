@@ -7,6 +7,7 @@ from config.settings import (
     POST_MAX_NEWS_PER_CYCLE,
     POST_MIN_SECONDS_BETWEEN_MESSAGES,
     SEND_BRIEFING_INTRO,
+    TARGET_CHANNEL_ID,
 )
 from services.news import NewsService
 from services.posting import PostingService
@@ -18,17 +19,10 @@ class NewsScheduler:
 
     @staticmethod
     def _select_cycle_articles(bot_instance, articles: list) -> list:
-        """Pick fresh uncached articles and cap output size for consistent pacing."""
-        fresh_articles = []
-        for article in articles:
-            news_id = NewsService.make_news_id(article)
-            if not bot_instance.is_news_cached(news_id):
-                fresh_articles.append(article)
-
-        if not fresh_articles:
-            return []
-
-        return fresh_articles[:POST_MAX_NEWS_PER_CYCLE]
+        """Pick articles for this cycle - deduplication already handled in fetch_all_news."""
+        # Deduplication is already done at the fetch level (URL + story signature).
+        # We no longer block posting based on cache - just cap for pacing.
+        return articles[:POST_MAX_NEWS_PER_CYCLE]
 
     @staticmethod
     async def _send_article_with_fallback(
@@ -73,7 +67,7 @@ class NewsScheduler:
 
     @staticmethod
     async def broadcast_news(bot_instance, chat_list: list = None):
-        """Broadcast one professional briefing cycle to subscribed chats."""
+        """Broadcast one professional briefing cycle to the target channel."""
         try:
             logger.info("Starting professional news briefing cycle...")
 
@@ -83,10 +77,19 @@ class NewsScheduler:
                 return
 
             if chat_list is None:
-                chat_list = bot_instance.get_subscribed_chats()
+                if TARGET_CHANNEL_ID:
+                    try:
+                        chat_id = int(TARGET_CHANNEL_ID)
+                        chat_list = [(chat_id, 'channel')]
+                    except ValueError:
+                        logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
+                        return
+                else:
+                    logger.warning("TARGET_CHANNEL_ID not set")
+                    return
 
             if not chat_list:
-                logger.info("No subscribed chats for news broadcast")
+                logger.info("No target channel configured for news broadcast")
                 return
 
             selected_articles = NewsScheduler._select_cycle_articles(bot_instance, articles)

@@ -9,7 +9,7 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: YOUR_ADMIN_ID
+      - key: TARGET_CHANNEL_ID
         sync: false
       - key: NEWSAPI_KEY
         sync: false
@@ -17,11 +17,9 @@ services:
         sync: false
       - key: FINNHUB_KEY
         sync: false
-      - key: CNBC_RSS_URL
-        sync: false
-      - key: TARGET_CHANNELS
-        sync: false
       - key: KEEP_ALIVE
         value: "True"
       - key: KEEP_ALIVE_INTERVAL
         value: "150"
+      - key: MAX_NEWS_AGE_HOURS
+        value: "2"
