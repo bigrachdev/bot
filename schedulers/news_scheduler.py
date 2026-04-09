@@ -68,13 +68,14 @@ class NewsScheduler:
     async def broadcast_news(bot_instance, chat_list: list = None):
         """Broadcast one professional briefing cycle to the target channel."""
         try:
-            logger.info("Starting professional news briefing cycle...")
+            logger.info("🔍 Starting professional news briefing cycle...")
 
             if chat_list is None:
                 if TARGET_CHANNEL_ID:
                     try:
                         chat_id = int(TARGET_CHANNEL_ID)
                         chat_list = [(chat_id, 'channel')]
+                        logger.info(f"✓ Target channel resolved: {chat_id}")
                     except ValueError:
                         logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
                         return
@@ -82,8 +83,13 @@ class NewsScheduler:
                     logger.warning("TARGET_CHANNEL_ID not set")
                     return
 
+            logger.info("📰 Fetching news articles...")
             articles = await NewsService.fetch_all_news()
+            logger.info(f"📊 Fetched {len(articles) if articles else 0} articles from news service")
+            
             selected_articles = NewsScheduler._select_cycle_articles(bot_instance, articles) if articles else []
+            logger.info(f"📌 Selected {len(selected_articles)} articles for this cycle")
+            
             chat_id, _ = chat_list[0]
 
             if selected_articles:

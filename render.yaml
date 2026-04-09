@@ -20,6 +20,6 @@ services:
       - key: KEEP_ALIVE
         value: "True"
       - key: KEEP_ALIVE_INTERVAL
-        value: "150"
+        value: "240"
       - key: MAX_NEWS_AGE_HOURS
         value: "2"

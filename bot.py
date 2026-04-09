@@ -153,17 +153,49 @@ async def setup_bot():
         raise
 
 
+async def _ensure_periodic_jobs_alive():
+    """Monitor and restart periodic jobs if they crash."""
+    logger.info("Starting periodic job monitor...")
+    
+    async def monitor_and_restart(name: str, interval: int, job_coro, task_list: list, index: int):
+        """Keep a periodic job alive by restarting if it crashes."""
+        while not stop_event.is_set():
+            try:
+                logger.info(f"Starting {name} job...")
+                await _run_periodic_job(name, interval, job_coro)
+            except Exception as e:
+                logger.error(f"❌ {name} job crashed: {e}", exc_info=True)
+                if not stop_event.is_set():
+                    logger.info(f"Restarting {name} job in 5 seconds...")
+                    await asyncio.sleep(5)
+            
+            if stop_event.is_set():
+                break
+    
+    # Keep track of monitor tasks
+    monitor_tasks = [
+        asyncio.create_task(
+            monitor_and_restart("news_broadcast", NEWS_INTERVAL_SECONDS, NewsScheduler.broadcast_news, [], 0)
+        ),
+        asyncio.create_task(
+            monitor_and_restart("analysis_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis, [], 1)
+        ),
+    ]
+    
+    return monitor_tasks
+
+
 async def main():
     """Main async entry point."""
     if KEEP_ALIVE:
         start_keep_alive()
-        asyncio.create_task(ping_server())
-        logger.info("Keep-alive pings scheduled")
+        # Ping every 4 minutes (240s) to stay well below Render's 15-min spin-down threshold
+        ping_task = asyncio.create_task(ping_server(port=8080, interval_seconds=240))
+        logger.info("Keep-alive HTTP pings scheduled (every 4 minutes)")
 
     application = await setup_bot()
 
     logger.info("Starting bot polling...")
-    periodic_tasks = []
 
     try:
         def on_polling_error(exc: Exception):
@@ -198,15 +230,8 @@ async def main():
 
         warmup_task.add_done_callback(_log_warmup_outcome)
 
-        # Durable periodic loops (self-healing).
-        periodic_tasks = [
-            asyncio.create_task(
-                _run_periodic_job("news_broadcast", NEWS_INTERVAL_SECONDS, NewsScheduler.broadcast_news)
-            ),
-            asyncio.create_task(
-                _run_periodic_job("analysis_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis)
-            ),
-        ]
+        # Start resilient periodic jobs that auto-restart if they crash
+        periodic_tasks = await _ensure_periodic_jobs_alive()
 
         await stop_event.wait()
 
@@ -214,7 +239,8 @@ async def main():
         logger.info("Bot stopped")
     finally:
         for task in periodic_tasks:
-            task.cancel()
+            if not task.done():
+                task.cancel()
         if periodic_tasks:
             await asyncio.gather(*periodic_tasks, return_exceptions=True)
 

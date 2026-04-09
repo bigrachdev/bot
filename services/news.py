@@ -787,11 +787,55 @@ class NewsService:
         Never returns empty unless ALL sources fail.
         """
         try:
-            # ---- Step 1: Fetch primary financial sources ----
-            cnbc_articles = await NewsService.fetch_news_cnbc_rss()
-            public_rss_articles = await NewsService.fetch_news_public_rss()
-            compact_newsapi = await NewsService.fetch_news_newsapi_compact()
-            av_articles = await NewsService.fetch_news_alphavantage()
+            # ---- Step 1: Fetch primary financial sources with timeouts ----
+            logger.info("📡 Fetching primary news sources with 30s timeout...")
+            try:
+                cnbc_articles = await asyncio.wait_for(
+                    NewsService.fetch_news_cnbc_rss(), timeout=30
+                )
+                logger.debug(f"  ✓ CNBC RSS: {len(cnbc_articles)} articles")
+            except asyncio.TimeoutError:
+                logger.warning("  ⏱️ CNBC RSS timed out (30s)")
+                cnbc_articles = []
+            except Exception as e:
+                logger.warning(f"  ❌ CNBC RSS failed: {e}")
+                cnbc_articles = []
+
+            try:
+                public_rss_articles = await asyncio.wait_for(
+                    NewsService.fetch_news_public_rss(), timeout=30
+                )
+                logger.debug(f"  ✓ Public RSS: {len(public_rss_articles)} articles")
+            except asyncio.TimeoutError:
+                logger.warning("  ⏱️ Public RSS timed out (30s)")
+                public_rss_articles = []
+            except Exception as e:
+                logger.warning(f"  ❌ Public RSS failed: {e}")
+                public_rss_articles = []
+
+            try:
+                compact_newsapi = await asyncio.wait_for(
+                    NewsService.fetch_news_newsapi_compact(), timeout=30
+                )
+                logger.debug(f"  ✓ NewsAPI Compact: {len(compact_newsapi)} articles")
+            except asyncio.TimeoutError:
+                logger.warning("  ⏱️ NewsAPI Compact timed out (30s)")
+                compact_newsapi = []
+            except Exception as e:
+                logger.warning(f"  ❌ NewsAPI Compact failed: {e}")
+                compact_newsapi = []
+
+            try:
+                av_articles = await asyncio.wait_for(
+                    NewsService.fetch_news_alphavantage(), timeout=30
+                )
+                logger.debug(f"  ✓ AlphaVantage: {len(av_articles)} articles")
+            except asyncio.TimeoutError:
+                logger.warning("  ⏱️ AlphaVantage timed out (30s)")
+                av_articles = []
+            except Exception as e:
+                logger.warning(f"  ❌ AlphaVantage failed: {e}")
+                av_articles = []
 
             market_articles = []
             commodity_articles = []

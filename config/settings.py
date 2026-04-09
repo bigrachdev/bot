@@ -31,8 +31,9 @@ FINNHUB_KEY = os.getenv('FINNHUB_KEY', '')
 TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', '')
 
 # Keep Alive (for Render/Heroku free tier)
+# Render spins down after 15 minutes of no HTTP activity, so we ping every 4 minutes
 KEEP_ALIVE = os.getenv('KEEP_ALIVE', 'True').lower() in ('true', '1', 'yes')
-KEEP_ALIVE_INTERVAL = int(os.getenv('KEEP_ALIVE_INTERVAL', '300'))
+KEEP_ALIVE_INTERVAL = int(os.getenv('KEEP_ALIVE_INTERVAL', '240'))  # 4 minutes, well below 15-min threshold
 
 # Posting governance (professional pacing and volume controls)
 POST_MAX_NEWS_PER_CYCLE = max(1, int(os.getenv('POST_MAX_NEWS_PER_CYCLE', '4')))
