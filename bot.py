@@ -81,25 +81,7 @@ async def startup_post(bot_instance, max_wait_seconds: int = 60, poll_interval_s
                 chat_list = [(chat_id, 'channel')]
                 logger.info(f"Target channel {chat_id} configured. Running startup posts.")
 
-                # Post online confirmation immediately.
-                from datetime import datetime, timezone
-                from services.posting import PostingService
-                try:
-                    health_msg = (
-                        f"<b>Market Bot Online</b>\n"
-                        f"Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
-                        f"News interval: {NEWS_INTERVAL_MINUTES}m | Analysis interval: {ANALYSIS_INTERVAL_MINUTES}m\n\n"
-                        f"<i>{PostingService.DISCLAIMER}</i>"
-                    )
-                    await bot_instance.bot.send_message(
-                        chat_id=chat_id,
-                        text=health_msg,
-                        parse_mode="HTML",
-                    )
-                    logger.info("Startup health message posted.")
-                except Exception as e:
-                    logger.error(f"Failed to post startup health message: {e}")
-
+                # Skip health message - go straight to news and analysis posts
                 try:
                     await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
                 except Exception as e:

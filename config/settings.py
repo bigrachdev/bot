@@ -19,30 +19,50 @@ if not BOT_TOKEN:
 # Database
 DB_NAME = 'market_bot.db'
 NEWS_CACHE_HOURS = 3  # Don't repost same news within 3 hours
-MAX_NEWS_AGE_HOURS = int(os.getenv('MAX_NEWS_AGE_HOURS', '2'))  # Only fresh news
 
-# News API Keys
+# ============================================================================
+# BOT OPERATIONAL PARAMETERS - HARDCODED FOR RELIABILITY
+# The bot follows these commands and ensures consistent behavior regardless
+# of environment configuration. These are NOT environment-dependent.
+# ============================================================================
+
+# News freshness: Only post articles younger than this
+MAX_NEWS_AGE_HOURS = 2
+
+# Posting governance - professional pacing and volume controls
+# Maximum number of news stories per broadcast cycle
+POST_MAX_NEWS_PER_CYCLE = 4
+
+# Delay between messages to respect Telegram rate limits
+POST_MIN_SECONDS_BETWEEN_MESSAGES = 0.8
+
+# Send briefing header before news cards
+SEND_BRIEFING_INTRO = True
+
+# Scheduler cadence - CRITICAL for consistent posting
+# News check every 15 minutes = ~4 posts/hour minimum
+NEWS_INTERVAL_MINUTES = 15
+
+# Analysis broadcast every 60 minutes = guaranteed market updates
+ANALYSIS_INTERVAL_MINUTES = 60
+
+# Keep-Alive settings - REQUIRED for Render free tier
+# Must ping every <15 min or Render will spin down
+KEEP_ALIVE = True
+KEEP_ALIVE_INTERVAL = 240  # 4 minutes - stays well below 15-min Render threshold
+
+# ============================================================================
+# END BOT OPERATIONAL PARAMETERS
+# ============================================================================
+
+# News API Keys (from .env - optional, but recommended)
 NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 ALPHAVANTAGE_KEY = os.getenv('ALPHAVANTAGE_KEY', '')
 FINNHUB_KEY = os.getenv('FINNHUB_KEY', '')
 
-# Target Channel (single channel ID for relentless posting)
+# Target Channel (from .env - REQUIRED)
 # Get channel ID by forwarding a message to @userinfobot
 TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', '')
-
-# Keep Alive (for Render/Heroku free tier)
-# Render spins down after 15 minutes of no HTTP activity, so we ping every 4 minutes
-KEEP_ALIVE = os.getenv('KEEP_ALIVE', 'True').lower() in ('true', '1', 'yes')
-KEEP_ALIVE_INTERVAL = int(os.getenv('KEEP_ALIVE_INTERVAL', '240'))  # 4 minutes, well below 15-min threshold
-
-# Posting governance (professional pacing and volume controls)
-POST_MAX_NEWS_PER_CYCLE = max(1, int(os.getenv('POST_MAX_NEWS_PER_CYCLE', '4')))
-POST_MIN_SECONDS_BETWEEN_MESSAGES = max(0.2, float(os.getenv('POST_MIN_SECONDS_BETWEEN_MESSAGES', '0.8')))
-SEND_BRIEFING_INTRO = os.getenv('SEND_BRIEFING_INTRO', 'True').lower() in ('true', '1', 'yes')
-
-# Scheduler cadence (minutes)
-NEWS_INTERVAL_MINUTES = max(5, int(os.getenv('NEWS_INTERVAL_MINUTES', '25')))
-ANALYSIS_INTERVAL_MINUTES = max(15, int(os.getenv('ANALYSIS_INTERVAL_MINUTES', '60')))
 
 # Stock data - top 50 stocks
 TOP_STOCKS = [

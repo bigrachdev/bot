@@ -13,9 +13,9 @@ class AnalysisScheduler:
 
     @staticmethod
     async def broadcast_analysis(bot_instance, chat_list: list = None):
-        """Broadcast stock performance snapshots to the target channel."""
+        """Broadcast stock performance snapshots to the target channel (market prices only, no signals)."""
         try:
-            logger.info("Starting analysis broadcast...")
+            logger.info("📊 Starting analysis broadcast (market snapshot only)...")
 
             if chat_list is None:
                 if TARGET_CHANNEL_ID:
@@ -34,12 +34,7 @@ class AnalysisScheduler:
             stock_prices = await AnalysisService.fetch_top_stock_prices()
             snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
 
-            signals = await AnalysisService.fetch_top_stocks_analysis()
-            if signals:
-                message = PostingService.format_analysis_bulletin(signals, "Stocks")
-            else:
-                message = PostingService.format_analysis_bulletin([], "Stocks")
-
+            # NOTE: Signals/analysis data NO LONGER posted - market snapshot only
             for cid, _chat_type in chat_list:
                 try:
                     await bot_instance.bot.send_message(
@@ -47,16 +42,10 @@ class AnalysisScheduler:
                         text=snapshot_message,
                         parse_mode='HTML',
                     )
-                    await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
-                    await bot_instance.bot.send_message(
-                        chat_id=cid,
-                        text=message,
-                        parse_mode='HTML',
-                    )
                 except Exception as e:
                     logger.error(f"Failed to send analysis to chat {cid}: {e}")
 
-            logger.info("Analysis broadcast complete")
+            logger.info("✅ Analysis broadcast complete (snapshot posted)")
 
         except Exception as e:
             logger.error(f"Analysis broadcast failed: {e}")
@@ -66,9 +55,9 @@ class AnalysisScheduler:
                     cid, _ = chat_list[0]
                     from datetime import datetime, timezone
                     fallback = (
-                        f"<b>Analysis Update</b>\n"
+                        f"<b>Market Snapshot</b>\n"
                         f"Published: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        "Analysis data temporarily unavailable.\n"
+                        "Market data temporarily unavailable.\n"
                         "<i>Educational market update only. Not financial advice.</i>"
                     )
                     await bot_instance.bot.send_message(

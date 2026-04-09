@@ -129,12 +129,20 @@ class NewsService:
         'after', 'amid', 'over', 'under', 'near', 'new', 'says', 'say'
     }
 
+    # ========================================================================
+    # PRIMARY NEWS SOURCES - Updated continuously with market-relevant content
+    # These sources are always available and ensure consistent posting
+    # ========================================================================
+
     # Fallback sources - crypto, war, general news (always available)
     CRYPTO_RSS_FEEDS = [
         ("https://cointelegraph.com/rss", "CoinTelegraph"),
         ("https://cryptonews.com/newsfeed", "CryptoNews"),
         ("https://bitcoinmagazine.com/.rss/full", "Bitcoin Magazine"),
         ("https://www.coindesk.com/arc/outboundfeeds/rss/", "CoinDesk"),
+        ("https://blockworks-research.beehive.news/feeds/rss/", "Blockworks"),
+        ("https://www.crypto-news-flash.com/feed/", "Crypto News Flash"),
+        ("https://theblockresearch.beehive.news/feeds/rss/", "The Block"),
     ]
 
     WAR_CONFLICT_RSS_FEEDS = [
@@ -144,6 +152,9 @@ class NewsService:
         ("https://feeds.skynews.com/feeds/rss/world.xml", "Sky News World"),
         ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
         ("https://feeds.reuters.com/reuters/worldMostRead", "Reuters Global"),
+        ("https://feeds.foxnews.com/foxnews/world", "Fox News World"),
+        ("https://feeds.bloomberg.com/markets/news/world.rss", "Bloomberg World"),
+        ("https://www.politico.com/rss/politicopicks.xml", "Politico"),
     ]
 
     GENERAL_NEWS_RSS_FEEDS = [
@@ -153,6 +164,37 @@ class NewsService:
         ("https://www.theguardian.com/world/rss", "Guardian World"),
         ("https://feeds.nbcnews.com/nbcnews/public/news", "NBC News"),
         ("https://www.newsweek.com/rss", "Newsweek"),
+        ("https://feeds.cnbc.com/cnbc/international/", "CNBC International"),
+        ("https://feeds.bloomberg.com/markets/news.rss", "Bloomberg Markets"),
+        ("https://rss.number10.gov.uk/news", "UK Number 10"),
+        ("https://feeds.washingtonpost.com/rss/world", "Washington Post World"),
+        ("https://feeds.independent.co.uk/independent-world.rss", "Independent World"),
+        ("https://feeds.ft.com/world", "Financial Times World"),
+    ]
+
+    # ADDITIONAL MARKET-SPECIFIC FEEDS for consistent financial content
+    MARKET_FEEDS = [
+        ("https://feeds.finance.yahoo.com/latest-news", "Yahoo Finance"),
+        ("https://feeds.marketwatch.com/marketwatch/topstories/", "MarketWatch"),
+        ("https://feeds.investing.com/stocks/news-feed.rss", "Investing.com Stocks"),
+        ("https://feeds.nasdaq.com/nasdaq/symbols/QQQ/news?resultsperpage=100", "Nasdaq"),
+        ("https://feeds.morningstar.com/", "Morningstar"),
+        ("https://feeds.zerohedge.com/feed/", "Zero Hedge"),
+        ("https://feeds.seekingalpha.com/feed.rss", "Seeking Alpha"),
+        ("https://feeds.benzinga.com/feed/", "Benzinga"),
+        ("https://feeds.thestreet.com/feed/", "TheStreet"),
+        ("https://feeds.stocknews.com/feed/", "StockNews"),
+    ]
+
+    # TECH & ECONOMY FEEDS (always have new articles)
+    TECH_ECONOMY_FEEDS = [
+        ("https://feeds.cnbc.com/cnbc/tech/", "CNBC Tech"),
+        ("https://feeds.cnbc.com/cnbc/business/", "CNBC Business"),
+        ("https://feeds.theverge.com/index.xml", "The Verge"),
+        ("https://feeds.arstechnica.com/arstechnica/technology", "Arstechnica"),
+        ("https://feeds.techcrunch.com/techcrunch/feed/", "TechCrunch"),
+        ("https://feeds.bloomberg.com/technology/news.rss", "Bloomberg Tech"),
+        ("https://feeds.reuters.com/finance", "Reuters Finance"),
     ]
 
     FALLBACK_WINDOW_HOURS = 12  # Fallback sources can use articles up to 12h old
@@ -887,18 +929,50 @@ class NewsService:
                 return NewsService._select_and_balance_articles(primary_fresh)
 
             # ---- Step 2: Primary sources are dry - fetch fallback sources ----
-            logger.warning("Primary financial sources returned no fresh articles. Fetching fallback sources.")
+            logger.warning("Primary financial sources returned no fresh articles. Fetching expanded fallback sources...")
 
+            # Fetch all fallback categories in parallel for speed
             crypto_articles = await NewsService.fetch_crypto_news()
             war_articles = await NewsService.fetch_war_conflict_news()
             general_articles = await NewsService.fetch_general_news()
+            
+            # IMPORTANT: Also fetch dedicated market and tech feeds - these always have content
+            logger.info("📊 Fetching dedicated market feeds...")
+            market_feed_tasks = [
+                NewsService._fetch_rss_feed_articles(url, name, 'market')
+                for url, name in NewsService.MARKET_FEEDS
+            ]
+            market_feed_results = await asyncio.gather(*market_feed_tasks, return_exceptions=True)
+            market_feed_articles = []
+            for result in market_feed_results:
+                if isinstance(result, list):
+                    market_feed_articles.extend(result)
+            logger.debug(f"  Market feeds: {len(market_feed_articles)} articles")
 
-            fallback_articles = crypto_articles + war_articles + general_articles
+            logger.info("💻 Fetching tech & economy feeds...")
+            tech_feed_tasks = [
+                NewsService._fetch_rss_feed_articles(url, name, 'market')
+                for url, name in NewsService.TECH_ECONOMY_FEEDS
+            ]
+            tech_feed_results = await asyncio.gather(*tech_feed_tasks, return_exceptions=True)
+            tech_feed_articles = []
+            for result in tech_feed_results:
+                if isinstance(result, list):
+                    tech_feed_articles.extend(result)
+            logger.debug(f"  Tech/Economy feeds: {len(tech_feed_articles)} articles")
+
+            fallback_articles = (
+                crypto_articles + war_articles + general_articles +
+                market_feed_articles + tech_feed_articles
+            )
             logger.info(
-                "Fallback sources | Crypto=%d World=%d General=%d",
+                "📡 Fallback sources | Crypto=%d World=%d General=%d Market=%d Tech=%d (Total=%d)",
                 len(crypto_articles),
                 len(war_articles),
                 len(general_articles),
+                len(market_feed_articles),
+                len(tech_feed_articles),
+                len(fallback_articles),
             )
 
             # Deduplicate fallback articles
@@ -915,10 +989,10 @@ class NewsService:
                 fallback_fresh = fallback_deduped
 
             if fallback_fresh:
-                logger.info(f"Fallback sources returned {len(fallback_fresh)} articles after dedup+recency filter")
+                logger.info(f"✅ Fallback sources returned {len(fallback_fresh)} fresh articles after dedup+filter")
                 return NewsService._select_and_balance_articles(fallback_fresh)
 
-            logger.error("ALL news sources (primary + fallback) returned empty results")
+            logger.error("❌ ALL news sources (primary + expanded fallback) returned empty results")
             return []
 
         except Exception as e:
