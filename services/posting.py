@@ -12,7 +12,7 @@ class PostingService:
     """Centralized post structure for reliable, professional broadcasts."""
 
     DISCLAIMER = "Educational market update only. Not financial advice."
-    DISCLAIMER = "<i>omnexfinancial.com</i>"
+    DISCLAIMER = "<i><a href='https://omnexfinancial.com'>Build your portfolio with omnexfinancial.com</a></i>"
 
     @staticmethod
     def _build_impact_line(article: dict) -> str:
