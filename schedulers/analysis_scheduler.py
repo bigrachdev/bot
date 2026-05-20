@@ -59,6 +59,7 @@ class AnalysisScheduler:
                         f"Published: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                         "Market data temporarily unavailable.\n"
                         "<i>Educational market update only. Not financial advice.</i>"
+                        "<i>omnexfinancial.com</i>"
                     )
                     await bot_instance.bot.send_message(
                         chat_id=cid,
